@@ -66,7 +66,13 @@ def download(url: str) -> bytes:
 
 
 def valid_date(raw: str) -> str | None:
-    raw = raw.strip().split(" ")[0]
+    raw = raw.strip().lstrip("\ufeff")
+    # CKAN can serialise its text/date fields as ISO 8601 datetimes.
+    # Use the calendar date as published by Queensland; never convert AEST to UTC here.
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$", raw)
+    if match:
+        return match.group(1)
+    raw = raw.split(" ")[0]
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d"):
         try:
             return dt.datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
@@ -98,14 +104,22 @@ def parse_official_csv(blob: bytes, year: int) -> dict:
             start = ix
             break
     if start is None:
-        raise ValueError("Missing expected QLD Date,Time,Ind,Reading CSV header")
+        lower = text[:2000].lower()
+        if "<html" in lower or "<!doctype html" in lower or "verify that you're not a robot" in lower:
+            raise ValueError("Government download returned HTML instead of a tide CSV (website verification or access block)")
+        sample = repr(lines[0][:150]) if lines else "<empty response>"
+        raise ValueError(f"Missing expected QLD Date,Time,Ind,Reading CSV header; first line: {sample}")
     reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
     result = {}
     count = 0
+    sample_record = None
     for rec in reader:
         if not rec or all(not str(v or "").strip() for v in rec.values()):
             continue
         rec = {str(k).strip().lower().replace(" ", ""): str(v or "").strip() for k, v in rec.items() if k is not None}
+        if sample_record is None:
+            # Tide data is a published open dataset; log one short example when parsing fails.
+            sample_record = {k: v[:90] for k, v in rec.items() if k in {"date", "time", "ind", "reading"}}
         day = valid_date(rec.get("date", ""))
         clock = valid_time(rec.get("time", ""))
         indicator = rec.get("ind", "").lower()
@@ -130,7 +144,8 @@ def parse_official_csv(blob: bytes, year: int) -> dict:
     # Annual prediction datasets are full-year files, not 1-week or HTML fragments.
     expected_days = (dt.date(year + 1, 1, 1) - dt.date(year, 1, 1)).days
     if len(result) != expected_days or count < 1100:
-        raise ValueError(f"Incomplete {year} prediction: {len(result)}/{expected_days} days / {count} events")
+        extra = f"; example input fields: {sample_record}" if count == 0 else ""
+        raise ValueError(f"Incomplete {year} prediction: {len(result)}/{expected_days} days / {count} events{extra}")
     return dict(sorted(result.items()))
 
 
