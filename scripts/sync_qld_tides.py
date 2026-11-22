@@ -36,7 +36,7 @@ FALLBACK_2026 = {
     "shute": "https://www.data.qld.gov.au/dataset/aa427579-32c5-4573-b3f5-79e6c2afb72a/resource/35c2e31e-b648-4334-bcf9-b44a37c7b9ca/download/q030003a_shute-harbour-storm-surge_2026_hilo.csv",
     "bowen": "https://www.data.qld.gov.au/dataset/b7436d8f-8ab7-4dad-aaa1-dc6abfacf6da/resource/d4324ba3-322a-4d7c-b9d2-9b1703f96f76/download/q061007a_bowen-storm-surge_2026_hilo.csv",
 }
-HEADERS = {"User-Agent": "SolunarFishingDataSync/3.1 (+https://github.com/shfjkhsd2d-star/Solunar-fishing)", "Accept": "text/csv, application/json, */*"}
+HEADERS = {"User-Agent": "SolunarFishingDataSync/3.5 (+https://github.com/shfjkhsd2d-star/Solunar-fishing)", "Accept": "text/csv, application/json, */*"}
 
 
 def government_url(url: str) -> bool:
@@ -122,8 +122,16 @@ def parse_official_csv(blob: bytes, year: int) -> dict:
             sample_record = {k: v[:90] for k, v in rec.items() if k in {"date", "time", "ind", "reading"}}
         day = valid_date(rec.get("date", ""))
         clock = valid_time(rec.get("time", ""))
-        indicator = rec.get("ind", "").lower()
-        if not day or not clock or day[:4] != str(year) or indicator not in ("h", "l", "high", "low"):
+        indicator = rec.get("ind", "").strip().lower()
+        # Queensland's CKAN high/low records use numeric indicators: 
+        # 1 = high water and -1 = low water. Older/manual data may use H/L.
+        # The numeric convention is distinct from the sign of the height:
+        # a positive reading can still be a *low* tide.
+        kind = {
+            "1": "high", "+1": "high", "h": "high", "high": "high", "hw": "high",
+            "-1": "low", "l": "low", "low": "low", "lw": "low",
+        }.get(indicator)
+        if not day or not clock or day[:4] != str(year) or kind is None:
             continue
         try:
             height = float(rec["reading"].replace("m", "").strip())
@@ -131,7 +139,6 @@ def parse_official_csv(blob: bytes, year: int) -> dict:
             continue
         if not (-3 <= height <= 20):
             continue
-        kind = "high" if indicator.startswith("h") else "low"
         timestamp = int(dt.datetime.strptime(f"{day} {clock}", "%Y-%m-%d %H:%M").replace(tzinfo=dt.timezone(dt.timedelta(hours=10))).timestamp() * 1000)
         result.setdefault(day, []).append({"time": timestamp, "type": kind, "height": round(height, 3)})
         count += 1
