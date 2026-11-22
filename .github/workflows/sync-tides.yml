@@ -2,11 +2,8 @@ name: Sync official Queensland tide predictions
 on:
   push:
     branches: [main]
-    # Sync on every ordinary GitHub upload. Commits made with GITHUB_TOKEN
-    # do not trigger a second workflow, so this is safe.
   workflow_dispatch:
   schedule:
-    # QLD annual predicted high/low resources; check for updates weekly.
     - cron: '23 2 * * 1'
 permissions:
   contents: write
@@ -25,6 +22,22 @@ jobs:
           python-version: '3.12'
       - name: Retrieve and validate QLD tides via Web API and CSV fallback
         run: python scripts/sync_qld_tides.py
+      - name: Retrieve and validate QLD 10-minute interval predictions
+        id: intervals
+        continue-on-error: true
+        run: python scripts/sync_qld_intervals.py
+      - name: Report interval sync result
+        if: always()
+        run: |
+          echo "## Queensland 10-minute tides" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.intervals.outcome }}" = "success" ]; then
+            echo "Interval sync completed. Check generated tide-data/interval-manifest.json for which years/stations were verified." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Interval sync did not complete. High/low tides remain available. Expand the interval step above to inspect its error." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -d tide-data ]; then
+            find tide-data -maxdepth 1 -type f -name '*-10min.json' -printf '%f\n' | sort >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Commit updated public tide files
         run: |
           git config user.name "github-actions[bot]"
