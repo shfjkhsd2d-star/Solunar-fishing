@@ -9,16 +9,15 @@
     if (app) app.textContent = 'App files were not loaded. Please refresh the page.';
     return;
   }
-  // Only these four locations can be selected for new forecasts and trips.
+  // Only these three locations can be selected for new forecasts and trips.
   // Keep existing IDs for saved settings and fishing trips from previous versions.
   const LOCATIONS = [
     { id: 'bowen', name: 'Bowen', lat: -20.013, lon: 148.245, station: 'bowen' },
     { id: 'lake-proserpine', name: 'Proserpine Dam', lat: -20.368, lon: 148.382, station: null, water: 'freshwater' },
-    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' },
-    { id: 'proserpine', name: 'Proserpine River Mouth', lat: -20.414, lon: 148.747, station: 'shute' }
+    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' }
   ];
   // Historical trip labels remain visible, but these sites are no longer selectable.
-  const RETIRED_LOCATION_NAMES = { airlie: 'Airlie Beach (previous location)', cannonvale: 'Cannonvale (previous location)' };
+  const RETIRED_LOCATION_NAMES = { airlie: 'Airlie Beach (previous location)', cannonvale: 'Cannonvale (previous location)', proserpine: 'Proserpine River Mouth (previous location)' };
   const STATIONS = {
     shute: { name: 'Shute Harbour', link: 'https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data' },
     bowen: { name: 'Bowen', link: 'https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data' }
@@ -72,7 +71,6 @@
     p.intervalUsed ? 'Sun + moon + verified QLD 10-minute predicted water-level movement' :
     !p.hasTides ? 'Sun + moon only; tide predictions unavailable for this date' :
       isOfficial(p.key) ? 'Sun + moon + QLD Government predicted high/low tides' : 'Sun + moon + previously imported tides';
-  const stationHint = () => isFreshwater() || loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides use <b>${STATIONS[loc().station].name}</b> as a <b>reference port only</b>. Actual river-mouth tide times, heights and water movement may differ considerably; no estuary correction has been applied.</p>`;
   const tideStatus = year => {
     if (isFreshwater()) return 'Not applicable to freshwater';
     const key = `${loc().station}-${year}`;
@@ -323,7 +321,7 @@
     const status = p.hasTides ? isOfficial(p.key) ? 'Official forecast' : 'Previously imported' : 'Not available';
     return `<section class="card"><div class="row"><h2 style="margin:0">Tides · ${s.name}</h2><span class="score-badge">${status}</span></div>
       ${p.tides.length ? `<div class="section-split">${tideRows(p)}</div>` : `<p class="small">Official QLD high/low tide predictions have not been loaded for this date. This score uses sun/moon only.</p>`}
-      <p class="hint">${escapeHtml(tideStatus(p.key.slice(0,4)))}</p>${stationHint()}
+      <p class="hint">${escapeHtml(tideStatus(p.key.slice(0,4)))}</p>
       <div class="actions"><button class="btn secondary" data-action="show-date-tides" data-date="${p.key}">View tide forecast</button></div>
     </section>`;
   }
@@ -348,7 +346,6 @@
       <p class="small">${preferred ? `Highest-rated window: <b>${clockRange(preferred.start, preferred.end)}</b>` : ''}</p>
       <div class="movement-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Predicted height throughout the day, in 10-minute increments" preserveAspectRatio="none"><line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#547b8a" stroke-width="1"/><polyline points="${pts}" fill="none" stroke="#64e0d3" stroke-width="2.2" stroke-linejoin="round"/></svg><div class="movement-axis"><span>12 am</span><span>6 am</span><span>12 pm</span><span>6 pm</span><span>12 am</span></div></div>
       <p class="hint">Predicted water-level change (metres/hour) over a 60-minute interval, calculated from official 10-minute heights. Relative movement compares this hour with stronger changes on the same day. <b>This does not measure current speed or predict fish catches.</b></p>
-      ${stationHint()}
     </section>`;
   }
   function renderToday() {
@@ -404,7 +401,7 @@
         <label for="tide-date">Date</label><input type="date" id="tide-date" value="${state.selected}">
         <div class="notice">${escapeHtml(tideStatus(state.selected.slice(0,4)))}</div>
         ${isOfficial(state.selected) ? `<p class="hint">Data channel: <b>${escapeHtml(state.manifest?.stations?.[loc().station]?.years?.[state.selected.slice(0,4)]?.source_method || 'Official Queensland dataset')}</b></p>` : ''}
-        <p class="hint">${nTideDays()} dates currently loaded for this station. Times are predicted, not live measurements. All times use AEST (UTC+10).</p>${stationHint()}
+        <p class="hint">${nTideDays()} dates currently loaded for this station. Times are predicted, not live measurements. All times use AEST (UTC+10).</p>
         <div class="divider"></div>${p.tides.length ? tideRows(p) : '<p class="small">No verified high/low tide predictions for this date.</p>'}
         <p class="hint">${escapeHtml(intervalStatus(state.selected.slice(0, 4)))}</p>${movementCard(p)}
         <div class="actions"><button class="btn secondary" data-action="retry-tides">Check for updated tide files</button></div>
@@ -417,15 +414,15 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.8</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <section class="card"><h2>What's new · v3.10</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
       <p>Verified 10-minute predicted heights now refine the tidal component of coastal five-star scores. If the complete interval dataset is unavailable, the app retains high/low-based scoring. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The Today screen now shows hourly wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
       <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts use verified 10-minute water-height changes when available; otherwise they retain high/low timing and midpoint estimates.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
-      <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour tides are used as an uncorrected coastal reference for Proserpine River Mouth, where estuary tides can arrive at different times and heights. Bowen uses Bowen station data. Proserpine Dam uses no coastal tide data.</p>
+      <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour uses Shute Harbour station predictions. Bowen uses Bowen station predictions. Proserpine Dam uses no coastal tide data.</p>
         <p>Weather: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.8 · 10-minute tide movement · Hourly weather + unit toggle · Four selectable locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.10 · 10-minute tide movement · Hourly weather + unit toggle · Three selectable locations</p></section>`;
   }
   function render() {
     try {

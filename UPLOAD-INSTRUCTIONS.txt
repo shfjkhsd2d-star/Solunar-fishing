@@ -1,0 +1,36 @@
+SOLUNAR FISHING v3.10 — REMOVE PROSERPINE RIVER MOUTH
+=====================================================
+
+WHAT CHANGES
+- Removes Proserpine River Mouth from all NEW location selections.
+- Leaves exactly Bowen, Proserpine Dam and Shute Harbour selectable.
+- Previously saved trips to the removed location remain visible as historic trips.
+- Existing saved preferred location 'proserpine' automatically switches to Shute Harbour.
+- Bumps the app's versioned asset URLs and service-worker cache so the iPhone refreshes.
+
+WHAT THIS PATCH DOES NOT CHANGE
+- Government high/low tide and 10-minute interval Python scripts
+- GitHub Actions workflows
+- tide-data folder and all generated JSON tide files
+- weather.js, movement.js, astro.js, tides.js, styles.css
+
+INSTALLATION (upload extracted files, NOT the ZIP itself)
+1. OPTIONAL BUT RECOMMENDED: In GitHub, create a branch from main called remove-river-mouth.
+2. Extract the ZIP and open the resulting folder.
+3. Upload ONLY app.js, index.html, sw.js into the ROOT of the repository,
+   replacing files with the same names. Do not upload the text instructions.
+4. Verify the change shows only those three root files.
+5. Commit, create a Pull Request, review it, then merge into main.
+6. Allow Render to deploy, then open https://solunar-fishing.onrender.com.
+7. Refresh in Safari; if using an installed Home Screen icon, fully close and reopen it.
+
+CONFIRM
+- Location selector: Bowen / Proserpine Dam / Shute Harbour (three options only).
+- Today's wind, tides and 10-minute chart still load as before.
+- Calendar and Trips still work.
+
+NOTE
+This patch is based on the previous v3.8/v3.9 app code developed in this
+conversation, since a live GitHub source download was unavailable here.
+If you have made additional edits to app.js, index.html or sw.js since then,
+compare before merging rather than overwriting your modifications.
