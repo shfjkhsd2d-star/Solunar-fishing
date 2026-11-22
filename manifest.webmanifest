@@ -1,1 +1,15 @@
-{"name":"Solunar & Tide Fishing Predictor","short_name":"Solunar","description":"Fishing window planning prototype","start_url":"./","scope":"./","display":"standalone","background_color":"#071b2b","theme_color":"#071b2b","icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},{"src":"icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]}
+{
+  "id": "/",
+  "name": "Solunar / Tide Fishing Planner",
+  "short_name": "Solunar Tide",
+  "description": "Whitsundays fishing window planner using sun, moon and optional verified tide predictions.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#071b2b",
+  "theme_color": "#071b2b",
+  "icons": [
+    {"src":"./icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
