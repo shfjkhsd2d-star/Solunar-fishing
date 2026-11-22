@@ -67,3 +67,15 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .wind-unit-option.selected{color:#07303b;background:var(--mint)}
 .wind-unit-option:not(.selected):hover{background:#1d4b5d;color:#f2ffff}
 @media(max-width:360px){.wind-unit-option{padding:7px 9px;min-width:52px}}
+
+/* v3.8 — verified 10-minute predicted tidal height-change display. */
+.movement-card{border-color:#377d80;background:linear-gradient(155deg,#103947,#092637 70%)}
+.movement-card h2{margin:0}
+.movement-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:15px 0 12px}
+.movement-stats>div{min-width:0;padding:11px 8px;border-radius:10px;background:#0a2a38;border:1px solid #2e6070}
+.movement-stats span{display:block;font-size:10px;color:#a9c8d1;min-height:30px;line-height:1.35}
+.movement-stats strong{display:block;font-size:17px;color:#e7fffa;line-height:1.25;margin-top:5px;overflow-wrap:anywhere}
+.movement-chart{background:#092937;border-radius:12px;border:1px solid #336070;padding:11px 9px 6px;margin:12px 0}
+.movement-chart svg{display:block;width:100%;height:108px;overflow:visible}
+.movement-axis{display:flex;justify-content:space-between;gap:2px;color:#b9d7dc;font-size:10px;margin-top:5px}
+@media(max-width:375px){.movement-stats{gap:5px}.movement-stats>div{padding:8px 5px}.movement-stats strong{font-size:14px}.movement-stats span{font-size:9px}.movement-chart svg{height:90px}}

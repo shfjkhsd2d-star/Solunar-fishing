@@ -118,7 +118,7 @@
     const min = Math.min(...chosen.map(e => Math.abs(e.time - center) / 3600000));
     return strength * Math.exp(-0.5 * Math.pow(min / widthHours, 2));
   };
-  function scoreAt(time, astro, tideEvents = []) {
+  function scoreAt(time, astro, tideEvents = [], movement = null) {
     const moon = astro.moon, sun = astro.sun;
     // Simple inspectable heuristic, not a trained fish-catch prediction model.
     let score = 15;
@@ -126,7 +126,10 @@
     score += expBoost(time, moon, ['moonrise', 'moonset'], 16, 1.15);
     score += expBoost(time, sun, ['sunrise', 'sunset'], 22, 1.1);
     score += 9 * Math.pow(Math.abs(astro.phase.fraction - 0.5) * 2, 1.15);
-    if (tideEvents.length) {
+    if (movement) {
+      // Verified 10-minute forecast water-level change supersedes the rough high/low midpoint proxy.
+      score += movement.bonus;
+    } else if (tideEvents.length) {
       score += expBoost(time, tideEvents, ['high', 'low'], 12, 1.5);
       // Mid-flood / mid-ebb often provides movement; require consecutive alternate turns.
       const ordered = [...tideEvents].sort((a,b) => a.time - b.time);
@@ -141,7 +144,7 @@
     return Math.max(1, Math.min(100, Math.round(score)));
   }
   function stars(score) { return score >= 78 ? 5 : score >= 62 ? 4 : score >= 46 ? 3 : score >= 30 ? 2 : 1; }
-  function predictDay(key, lat, lon, tideByDate) {
+  function predictDay(key, lat, lon, tideByDate, intervalByDate = null) {
     const astro = dayAstronomy(key, lat, lon);
     const around = [-1,0,1].flatMap(delta => {
       const date = dateKey(new Date(astro.start + delta * DAY_MS));
@@ -150,12 +153,16 @@
     const tides = around.map(e => ({ ...e, time: Number(e.time) })).filter(e => Number.isFinite(e.time));
     const hasTides = Boolean(tideByDate && Array.isArray(tideByDate[key]) && tideByDate[key].length >= 2);
     const eligibleTides = hasTides ? tides : [];
+    const movement = global.SolunarMovement && intervalByDate && intervalByDate[key]
+      ? global.SolunarMovement.build(intervalByDate[key]) : null;
     let candidates = [];
     // 2-hour fishing windows, 30-minute starts from 00:00 to 22:00 AEST.
     for (let offset = 0; offset <= 22 * 60; offset += 30) {
       const start = astro.start + offset * 60000;
       const center = start + 3600000;
-      candidates.push({ start, end: start + 2 * 3600000, score: scoreAt(center, astro, eligibleTides) });
+      const movementInfo = movement ? movement.atMinute(offset + 60) : null;
+      candidates.push({ start, end: start + 2 * 3600000,
+        score: scoreAt(center, astro, eligibleTides, movementInfo), movement: movementInfo });
     }
     candidates.sort((a,b)=>b.score-a.score || a.start-b.start);
     const best = [];
@@ -164,7 +171,9 @@
       if (best.length === 3) break;
     }
     best.sort((a,b)=>a.start-b.start);
-    return { key, astro, score: candidates[0].score, stars: stars(candidates[0].score), windows: best, hasTides, tides: tideByDate?.[key] || [] };
+    return { key, astro, score: candidates[0].score, stars: stars(candidates[0].score), windows: best,
+      hasTides: hasTides || Boolean(movement), hasHighLow: hasTides, intervalUsed: Boolean(movement),
+      movement: movement ? movement.atMinute(720) : null, tides: tideByDate?.[key] || [] };
   }
   global.SolunarAstro = { dayStart, dateKey, dayAstronomy, moonIllumination, predictDay, stars, phaseName, scoreAt };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.SolunarAstro;

@@ -44,6 +44,8 @@
     tides: persistent.tides && typeof persistent.tides === 'object' ? persistent.tides : {}, // previous manual imports as fallback
     official: {}, // live data from repo static files, not copied to localStorage
     manifest: null, manifestError: '', manifestPromise: null,
+    intervals: {}, intervalManifest: null, intervalManifestPromise: null, intervalErrors: {},
+    intervalLoaded: new Set(), intervalLoading: new Set(),
     loadedYears: new Set(), loadingYears: new Set(), yearErrors: {},
     flash: '',
     weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {}, weatherExpanded: false,
@@ -62,11 +64,14 @@
   const isFreshwater = () => loc().station === null;
   const tideMap = () => isFreshwater() ? {} : { ...(state.tides[loc().station] || {}), ...(state.official[loc().station] || {}) };
   const isOfficial = key => !isFreshwater() && !!state.official[loc().station]?.[key];
-  const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap());
+  const intervalMap = () => isFreshwater() ? {} : state.intervals[loc().station] || {};
+  const hasInterval = key => !isFreshwater() && Array.isArray(intervalMap()[key]);
+  const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap(), intervalMap());
   const nTideDays = () => Object.keys(tideMap()).length;
   const sourceStatus = p => isFreshwater() ? 'Freshwater · sun and moon only · no ocean tide influence' :
-    !p.hasTides ? 'Sun + moon only; official tides unavailable for this date' :
-      isOfficial(p.key) ? 'Sun + moon + QLD Government predicted tides' : 'Sun + moon + previously imported tides';
+    p.intervalUsed ? 'Sun + moon + verified QLD 10-minute predicted water-level movement' :
+    !p.hasTides ? 'Sun + moon only; tide predictions unavailable for this date' :
+      isOfficial(p.key) ? 'Sun + moon + QLD Government predicted high/low tides' : 'Sun + moon + previously imported tides';
   const stationHint = () => isFreshwater() || loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides use <b>${STATIONS[loc().station].name}</b> as a <b>reference port only</b>. Actual river-mouth tide times, heights and water movement may differ considerably; no estuary correction has been applied.</p>`;
   const tideStatus = year => {
     if (isFreshwater()) return 'Not applicable to freshwater';
@@ -124,10 +129,68 @@
     } catch (error) { state.yearErrors[k] = error.message || 'Unable to load official predictions'; }
     finally { state.loadingYears.delete(k); render(); }
   }
+  function loadIntervalManifest() {
+    if (state.intervalManifestPromise) return state.intervalManifestPromise;
+    state.intervalManifestPromise = fetch('./tide-data/interval-manifest.json', { cache: 'no-store' })
+      .then(resp => {
+        if (!resp.ok) throw new Error(resp.status === 404 ? '10-minute files not published yet' : `10-minute index HTTP ${resp.status}`);
+        return resp.json();
+      })
+      .then(data => {
+        if (data.schema !== 1 || !data.stations) throw new Error('Invalid 10-minute index');
+        state.intervalManifest = data;
+        return data;
+      });
+    return state.intervalManifestPromise;
+  }
+  async function loadIntervals(station, year) {
+    if (!station) return;
+    const k = `${station}-${year}`;
+    if (state.intervalLoaded.has(k) || state.intervalLoading.has(k) || state.intervalErrors[k]) return;
+    state.intervalLoading.add(k);
+    try {
+      const manifest = await loadIntervalManifest();
+      const entry = manifest.stations?.[station]?.years?.[year];
+      if (!entry) throw new Error(`No verified ${year} 10-minute dataset published`);
+      const file = `./tide-data/${station}-${year}-10min.json`;
+      if (entry.file !== file) throw new Error('Unexpected 10-minute data file path');
+      const response = await fetch(file, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`10-minute data file returned HTTP ${response.status}`);
+      const result = await response.json();
+      const days = (Date.UTC(+year + 1, 0, 1) - Date.UTC(+year, 0, 1)) / 86400000;
+      if (result.schema !== 1 || result.station !== station || result.year !== +year ||
+          result.interval_minutes !== 10 || !/^https:\/\/(?:[a-z0-9-]+\.)*qld\.gov\.au\//i.test(result.source_url || '') ||
+          !result.byDate || Object.keys(result.byDate).length !== days) throw new Error('Invalid official 10-minute dataset');
+      for (const [date, readings] of Object.entries(result.byDate)) {
+        if (!date.startsWith(`${year}-`) || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+            !Array.isArray(readings) || readings.length !== 144 ||
+            !readings.every(h => typeof h === 'number' && Number.isFinite(h) && h >= -3 && h <= 20)) {
+          throw new Error('Invalid 10-minute reading');
+        }
+      }
+      state.intervals[station] = { ...(state.intervals[station] || {}), ...result.byDate };
+      state.intervalLoaded.add(k);
+    } catch (error) {
+      state.intervalErrors[k] = error?.message || '10-minute predictions unavailable';
+      // This never prevents the existing high/low predictions from loading.
+    } finally {
+      state.intervalLoading.delete(k);
+      render();
+    }
+  }
+  function intervalStatus(year) {
+    if (isFreshwater()) return 'Not applicable to freshwater';
+    const k = `${loc().station}-${year}`;
+    if (state.intervalLoaded.has(k)) return 'Verified 10-minute predictions active';
+    if (state.intervalLoading.has(k)) return 'Checking official 10-minute predictions…';
+    if (state.intervalErrors[k]) return `${state.intervalErrors[k]} · High/low scoring still available`;
+    return 'Looking for 10-minute predictions…';
+  }
   function syncVisibleTides() {
     if (isFreshwater()) return;
     const year = state.tab === 'today' ? todayKey().slice(0,4) : state.selected.slice(0,4);
     void loadOfficial(loc().station, year);
+    void loadIntervals(loc().station, year);
   }
   // Weather is intentionally a separate, best-match Open-Meteo model forecast.
   // The official BOM ACCESS-G feed has not published new public model runs since 2025-06-26.
@@ -228,14 +291,14 @@
   function scoreCard(p, date, withSave = true) {
     return `<article class="card">
       <div class="eyebrow">${escapeHtml(fullDate(date))}</div>
-      <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${isFreshwater() ? 'Freshwater' : isOfficial(date) ? 'Official QLD tides' : p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
+      <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${isFreshwater() ? 'Freshwater' : p.intervalUsed ? '10-min QLD movement' : isOfficial(date) ? 'Official QLD tides' : p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
       <p class="small">${escapeHtml(sourceStatus(p))}. A <b>relative planning score</b>, not a catch probability or guaranteed result.</p>
       ${withSave ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button>` : ''}</div>` : ''}
     </article>`;
   }
   function windowCards(p) {
     if (!p.windows.length) return '<p>No windows could be calculated for this day.</p>';
-    return p.windows.map(w => `<div class="window"><div><div class="window-time">${clockRange(w.start, w.end)}</div><div class="window-detail">2-hour opportunity · Queensland time</div></div><div class="window-score"><div class="star-small" aria-label="${w.stars} stars">${starText(w.stars)}</div><small>${w.score}/100</small></div></div>`).join('');
+    return p.windows.map(w => `<div class="window"><div><div class="window-time">${clockRange(w.start, w.end)}</div><div class="window-detail">2-hour opportunity · Queensland time${w.movement ? ` · ${w.movement.direction === 'near-slack' ? 'gentle change' : w.movement.direction} ${Math.abs(w.movement.rate).toFixed(2)} m/h` : ''}</div></div><div class="window-score"><div class="star-small" aria-label="${w.stars} stars">${starText(w.stars)}</div><small>${w.score}/100</small></div></div>`).join('');
   }
   const eventName = type => ({ sunrise: 'Sunrise', sunset: 'Sunset', moonrise: 'Moonrise', moonset: 'Moonset', overhead: 'Moon overhead', underfoot: 'Moon underfoot', high: 'High tide', low: 'Low tide' }[type] || type);
   function eventsCard(p) {
@@ -264,13 +327,38 @@
       <div class="actions"><button class="btn secondary" data-action="show-date-tides" data-date="${p.key}">View tide forecast</button></div>
     </section>`;
   }
+  function movementCard(p) {
+    if (isFreshwater()) return '';
+    if (!p.intervalUsed) return `<section class="card movement-card"><div class="row"><h2>≈ 10-minute tide movement</h2><span class="score-badge">High/low fallback</span></div>
+      <p class="small">${escapeHtml(intervalStatus(p.key.slice(0, 4)))}. ${p.hasHighLow ? 'Your current score still uses the working high/low tide model.' : 'The current score uses sun/moon only.'}</p>
+      <p class="hint">When a complete official 10-minute year is published, this section will show predicted water-level changes and use them to refine the rating.</p></section>`;
+    const readings = intervalMap()[p.key];
+    const preferred = [...p.windows].sort((a,b)=>b.score-a.score)[0];
+    const rate = preferred?.movement || null;
+    const width = 320, height = 90, left = 12, right = 308, top = 8, bottom = 78;
+    const minimum = Math.min(...readings), maximum = Math.max(...readings), span = Math.max(.1, maximum - minimum);
+    const pts = readings.map((h,i)=>`${(left + i / 143 * (right - left)).toFixed(1)},${(bottom - (h-minimum)/span*(bottom-top)).toFixed(1)}`).join(' ');
+    return `<section class="card movement-card" aria-label="10-minute predicted tidal water levels for ${escapeHtml(loc().name)}">
+      <div class="row wrap"><h2>≈ 10-minute tide movement</h2><span class="score-badge">Official forecast</span></div>
+      <div class="movement-stats">
+        <div><span>Best-window height change</span><strong>${rate ? `${rate.rate > 0 ? '+' : ''}${rate.rate.toFixed(2)} m/h` : '—'}</strong></div>
+        <div><span>Water level</span><strong>${rate ? (rate.direction === 'rising' ? 'Rising' : rate.direction === 'falling' ? 'Falling' : 'Changing slowly') : '—'}</strong></div>
+        <div><span>Relative movement</span><strong>${rate ? `${rate.percent}%` : '—'}</strong></div>
+      </div>
+      <p class="small">${preferred ? `Highest-rated window: <b>${clockRange(preferred.start, preferred.end)}</b>` : ''}</p>
+      <div class="movement-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Predicted height throughout the day, in 10-minute increments" preserveAspectRatio="none"><line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#547b8a" stroke-width="1"/><polyline points="${pts}" fill="none" stroke="#64e0d3" stroke-width="2.2" stroke-linejoin="round"/></svg><div class="movement-axis"><span>12 am</span><span>6 am</span><span>12 pm</span><span>6 pm</span><span>12 am</span></div></div>
+      <p class="hint">Predicted water-level change (metres/hour) over a 60-minute interval, calculated from official 10-minute heights. Relative movement compares this hour with stronger changes on the same day. <b>This does not measure current speed or predict fish catches.</b></p>
+      ${stationHint()}
+    </section>`;
+  }
   function renderToday() {
     const date = todayKey(), p = predict(date);
     return `<p class="eyebrow">Your local fishing outlook</p><h1>Find your next great fishing window.</h1><p class="lead">Calculated for the Whitsundays, in Queensland time (AEST). Coastal tide forecasts sync automatically from Queensland Government data.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
       ${scoreCard(p,date)}
       ${weatherCard()}
-      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Windows favour moon transit/rise/set and sunrise/sunset. Coastal sessions also consider tidal movement when official data is loaded. Freshwater locations never use ocean tides.</p></section>
+      ${movementCard(p)}
+      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Windows favour moon transit/rise/set and sunrise/sunset. Verified 10-minute predictions replace rough high/low tidal-movement estimates when available. Freshwater locations never use ocean tides.</p></section>
       ${eventsCard(p)}${tideCard(p)}
       <div class="notice warning">Fishing activity is influenced by weather, habitat, water clarity and local conditions, not just tides or the moon. Check official forecasts and fishing regulations before leaving.</div>`;
   }
@@ -287,11 +375,11 @@
     const forecasts = dateList.map(d => ({ date:d, ...predict(d) }));
     const selected = predict(state.selected);
     const label = new Date(Date.UTC(year,month-1,15)).toLocaleDateString('en-AU',{timeZone:'UTC',month:'long',year:'numeric'});
-    const calendar = `<div class="cal-grid">${['M','T','W','T','F','S','S'].map(d=>`<div class="cal-week">${d}</div>`).join('')}${'<div class="cal-day empty"></div>'.repeat(blank)}${forecasts.map(d=>`<button class="cal-day ${d.date===todayKey()?'today-day':''} ${d.date===state.selected?'selected':''}" data-action="select-date" data-date="${d.date}" aria-label="${escapeHtml(fullDate(d.date))}, ${d.stars} stars"><span>${Number(d.date.slice(-2))}</span><span class="cal-rating">${d.stars}★${d.hasTides ? ' ≋' : ''}</span></button>`).join('')}</div>`;
+    const calendar = `<div class="cal-grid">${['M','T','W','T','F','S','S'].map(d=>`<div class="cal-week">${d}</div>`).join('')}${'<div class="cal-day empty"></div>'.repeat(blank)}${forecasts.map(d=>`<button class="cal-day ${d.date===todayKey()?'today-day':''} ${d.date===state.selected?'selected':''}" data-action="select-date" data-date="${d.date}" aria-label="${escapeHtml(fullDate(d.date))}, ${d.stars} stars"><span>${Number(d.date.slice(-2))}</span><span class="cal-rating">${d.stars}★${d.intervalUsed ? ' ≈' : d.hasTides ? ' ≋' : ''}</span></button>`).join('')}</div>`;
     const top = [...forecasts].sort((a,b)=>b.score-a.score || a.date.localeCompare(b.date)).slice(0,5);
     return `<p class="eyebrow">Plan ahead</p><h1>Fishing calendar</h1><p class="lead">Compare estimated fishing windows by day and save your trips.</p><div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><div class="calendar-header"><button class="chevron" data-action="prev-month" aria-label="Previous month">‹</button><strong>${label}</strong><button class="chevron" data-action="next-month" aria-label="Next month">›</button></div>${calendar}<p class="hint">★ Relative score · ≋ Tide-informed (official or legacy import). Dates without tide files use sun/moon only. Freshwater ignores tides.</p></section>
-      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${windowCards(selected)}<div class="actions"><button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button>` : ''}</div></section>
+      <section class="card"><div class="calendar-header"><button class="chevron" data-action="prev-month" aria-label="Previous month">‹</button><strong>${label}</strong><button class="chevron" data-action="next-month" aria-label="Next month">›</button></div>${calendar}<p class="hint">★ Relative score · ≈ Verified 10-minute movement · ≋ High/low tide estimate. Missing tide data uses sun/moon only. Freshwater ignores tides.</p></section>
+      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${selected.intervalUsed ? '<p class="hint">≈ Tide movement is based on official 10-minute predicted water heights.</p>' : ''}${windowCards(selected)}<div class="actions"><button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button>` : ''}</div></section>
       <section class="card"><h2>Top 5 dates this month</h2><div class="best-days">${top.map(d=>`<button class="best-day" data-action="select-date" data-date="${d.date}"><span>${shortDate(d.date)}${d.hasTides ? ' · tides available':''}</span><span class="star-small">${starText(d.stars)} · ${d.score}</span></button>`).join('')}</div></section>`;
   }
   function renderTrips() {
@@ -312,12 +400,13 @@
     const station = STATIONS[loc().station];
     return `<p class="eyebrow">Automatic official predictions</p><h1>Tide planner</h1><p class="lead">High and low tides from Queensland Government data, synced through the official Web API with a verified CSV fallback. No manual entry needed.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><div class="row"><h2>${station.name} tide station</h2><span class="score-badge">${isOfficial(state.selected) ? 'Official QLD' : p.hasTides ? 'Legacy import' : 'Solunar only'}</span></div>
+      <section class="card"><div class="row"><h2>${station.name} tide station</h2><span class="score-badge">${p.intervalUsed ? '10-min QLD' : isOfficial(state.selected) ? 'Official QLD' : p.hasTides ? 'Legacy import' : 'Solunar only'}</span></div>
         <label for="tide-date">Date</label><input type="date" id="tide-date" value="${state.selected}">
         <div class="notice">${escapeHtml(tideStatus(state.selected.slice(0,4)))}</div>
         ${isOfficial(state.selected) ? `<p class="hint">Data channel: <b>${escapeHtml(state.manifest?.stations?.[loc().station]?.years?.[state.selected.slice(0,4)]?.source_method || 'Official Queensland dataset')}</b></p>` : ''}
         <p class="hint">${nTideDays()} dates currently loaded for this station. Times are predicted, not live measurements. All times use AEST (UTC+10).</p>${stationHint()}
-        <div class="divider"></div>${p.tides.length ? tideRows(p) : '<p class="small">No verified high/low predictions for this date. The app will show solunar-only scores until the official data is available.</p>'}
+        <div class="divider"></div>${p.tides.length ? tideRows(p) : '<p class="small">No verified high/low tide predictions for this date.</p>'}
+        <p class="hint">${escapeHtml(intervalStatus(state.selected.slice(0, 4)))}</p>${movementCard(p)}
         <div class="actions"><button class="btn secondary" data-action="retry-tides">Check for updated tide files</button></div>
         <p class="hint">Troubleshooting: <a href="./tide-data/manifest.json" target="_blank" rel="noopener noreferrer">Open tide index</a> · <a href="./tide-data/${loc().station}-${state.selected.slice(0,4)}.json" target="_blank" rel="noopener noreferrer">Open year file</a> · <a href="https://github.com/shfjkhsd2d-star/Solunar-fishing/actions/workflows/sync-tides.yml" target="_blank" rel="noopener noreferrer">Check GitHub tide sync</a>.</p>
       </section>
@@ -328,15 +417,15 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.6</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
-      <p>The Today screen now shows hourly wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
-      <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts also consider high/low and between-tide movement when official data is available.</p>
+      <section class="card"><h2>What's new · v3.8</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Verified 10-minute predicted heights now refine the tidal component of coastal five-star scores. If the complete interval dataset is unavailable, the app retains high/low-based scoring. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The Today screen now shows hourly wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts use verified 10-minute water-height changes when available; otherwise they retain high/low timing and midpoint estimates.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
       <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour tides are used as an uncorrected coastal reference for Proserpine River Mouth, where estuary tides can arrive at different times and heights. Bowen uses Bowen station data. Proserpine Dam uses no coastal tide data.</p>
         <p>Weather: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.7 · Hourly weather + wind unit toggle · Four selectable locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.8 · 10-minute tide movement · Hourly weather + unit toggle · Four selectable locations</p></section>`;
   }
   function render() {
     try {
@@ -401,7 +490,7 @@
       }
       case 'toggle-weather': state.weatherExpanded = !state.weatherExpanded; render(); break;
       case 'retry-weather': { state.weatherErrors[loc().id] = ''; syncVisibleWeather(true); break; }
-      case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); refresh(); break; }
+      case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); state.intervalManifestPromise = null; state.intervalManifest = null; state.intervalErrors = {}; state.intervals = {}; state.intervalLoaded.clear(); refresh(); break; }
     }
   });
   document.addEventListener('change', event => {
