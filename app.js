@@ -8,14 +8,16 @@
     if (app) app.textContent = 'App files were not loaded. Please refresh the page.';
     return;
   }
+  // Only these four locations can be selected for new forecasts and trips.
+  // Keep existing IDs for saved settings and fishing trips from previous versions.
   const LOCATIONS = [
-    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' },
-    { id: 'airlie', name: 'Airlie Beach', lat: -20.268, lon: 148.719, station: 'shute' },
-    { id: 'cannonvale', name: 'Cannonvale', lat: -20.280, lon: 148.705, station: 'shute' },
     { id: 'bowen', name: 'Bowen', lat: -20.013, lon: 148.245, station: 'bowen' },
-    { id: 'proserpine', name: 'Proserpine River mouth', lat: -20.414, lon: 148.747, station: 'shute' },
-    { id: 'lake-proserpine', name: 'Lake Proserpine (Peter Faust Dam)', lat: -20.368, lon: 148.382, station: null, water: 'freshwater' }
+    { id: 'lake-proserpine', name: 'Proserpine Dam', lat: -20.368, lon: 148.382, station: null, water: 'freshwater' },
+    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' },
+    { id: 'proserpine', name: 'Proserpine River Mouth', lat: -20.414, lon: 148.747, station: 'shute' }
   ];
+  // Historical trip labels remain visible, but these sites are no longer selectable.
+  const RETIRED_LOCATION_NAMES = { airlie: 'Airlie Beach (previous location)', cannonvale: 'Cannonvale (previous location)' };
   const STATIONS = {
     shute: { name: 'Shute Harbour', link: 'https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data' },
     bowen: { name: 'Bowen', link: 'https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data' }
@@ -62,7 +64,7 @@
   const sourceStatus = p => isFreshwater() ? 'Freshwater · sun and moon only · no ocean tide influence' :
     !p.hasTides ? 'Sun + moon only; official tides unavailable for this date' :
       isOfficial(p.key) ? 'Sun + moon + QLD Government predicted tides' : 'Sun + moon + previously imported tides';
-  const stationHint = () => isFreshwater() || loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides use <b>${STATIONS[loc().station].name}</b> as a <b>reference port only</b>. Local creek and beach times may differ; no location-specific correction has been applied.</p>`;
+  const stationHint = () => isFreshwater() || loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides use <b>${STATIONS[loc().station].name}</b> as a <b>reference port only</b>. Actual river-mouth tide times, heights and water movement may differ considerably; no estuary correction has been applied.</p>`;
   const tideStatus = year => {
     if (isFreshwater()) return 'Not applicable to freshwater';
     const key = `${loc().station}-${year}`;
@@ -78,7 +80,11 @@
   function manifestLoad() {
     if (state.manifestPromise) return state.manifestPromise;
     state.manifestPromise = fetch('./tide-data/manifest.json', { cache: 'no-store' })
-      .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return resp.json(); })
+      .then(resp => {
+        if (resp.status === 404) throw new Error('Tide index missing on website (/tide-data/manifest.json). Upload tide-data/manifest.json and check Render deployment.');
+        if (!resp.ok) throw new Error(`Tide index request failed (HTTP ${resp.status})`);
+        return resp.json();
+      })
       .then(data => { if (data.schema !== 1 || !data.stations) throw new Error('Invalid tide index'); state.manifest = data; return data; })
       .catch(error => { state.manifestError = error.message || 'Network unavailable'; throw error; });
     return state.manifestPromise;
@@ -92,11 +98,11 @@
     try {
       const manifest = await manifestLoad();
       const entry = manifest.stations?.[station]?.years?.[year];
-      if (!entry) { state.yearErrors[k] = `No ${year} file in the published QLD data feed`; return; }
+      if (!entry) { state.yearErrors[k] = `No verified ${station.toUpperCase()} ${year} file published. Run GitHub Actions → Sync official Queensland tide predictions and check its log.`; return; }
       const expectedFile = `./tide-data/${station}-${year}.json`;
       if (entry.file !== expectedFile) throw new Error('Unexpected tide file path');
       const resp = await fetch(expectedFile, { cache: 'no-store' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) throw new Error(`Requested /tide-data/${station}-${year}.json returned HTTP ${resp.status}. The generated tide file is missing on Render; check GitHub Actions and redeploy.`);
       const obj = await resp.json();
       if (obj.schema !== 1 || obj.station !== station || obj.year !== +year || !/^https:\/\/(?:[a-z0-9-]+\.)*qld\.gov\.au\//i.test(obj.source_url || '') || !obj.byDate || Object.keys(obj.byDate).length < 350) {
         throw new Error('Invalid official tide data');
@@ -156,7 +162,7 @@
     return [...p.tides].sort((a,b)=>a.time-b.time).map(e => `<div class="tide-row"><span class="tide-type">${eventName(e.type)}</span><span>${timeText(e.time)}</span><span class="tide-h">${e.height === null || !Number.isFinite(Number(e.height)) ? '—' : `${Number(e.height).toFixed(2)} m`}</span></div>`).join('');
   }
   function tideCard(p) {
-    if (isFreshwater()) return `<section class="card"><div class="row"><h2 style="margin:0">Lake Proserpine · freshwater</h2><span class="score-badge">No coastal tides</span></div>
+    if (isFreshwater()) return `<section class="card"><div class="row"><h2 style="margin:0">Proserpine Dam · freshwater</h2><span class="score-badge">No coastal tides</span></div>
       <p class="small">Peter Faust Dam is a freshwater reservoir. Ocean high and low tide times are <b>not used</b> for lake fishing predictions.</p>
       <p class="hint">Barramundi and sooty grunter are stocked. A Stocked Impoundment Permit is required for anglers aged 18 or older.</p>
       <p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Queensland Government · Peter Faust Dam rules ↗</a></p></section>`;
@@ -198,18 +204,19 @@
       <section class="card"><h2>Top 5 dates this month</h2><div class="best-days">${top.map(d=>`<button class="best-day" data-action="select-date" data-date="${d.date}"><span>${shortDate(d.date)}${d.hasTides ? ' · tides available':''}</span><span class="star-small">${starText(d.stars)} · ${d.score}</span></button>`).join('')}</div></section>`;
   }
   function renderTrips() {
-    const trips = [...state.trips].filter(t => typeof t.date === 'string' && LOCATIONS.some(l=>l.id===t.locId)).sort((a,b)=>a.date.localeCompare(b.date));
+    const trips = [...state.trips].filter(t => typeof t.date === 'string' && (LOCATIONS.some(l=>l.id===t.locId) || Object.hasOwn(RETIRED_LOCATION_NAMES, t.locId))).sort((a,b)=>a.date.localeCompare(b.date));
     return `<p class="eyebrow">Your saved sessions</p><h1>Fishing trips</h1><p class="lead">Sessions save on this device and remain available offline.</p>${flash()}
       <section class="card"><h2>Saved sessions (${trips.length})</h2>${trips.length ? trips.map(t => {
         const place = LOCATIONS.find(l=>l.id===t.locId);
-        return `<div class="saved-item"><div class="row"><div><strong>${escapeHtml(fullDate(t.date))}</strong><span>${escapeHtml(place.name)}</span><span>${clockRange(t.start, t.end)}</span></div><button class="btn danger" data-action="remove-trip" data-id="${escapeHtml(t.id)}">Remove</button></div></div>`;
+        const displayName = place ? place.name : RETIRED_LOCATION_NAMES[t.locId];
+        return `<div class="saved-item"><div class="row"><div><strong>${escapeHtml(fullDate(t.date))}</strong><span>${escapeHtml(displayName)}</span><span>${clockRange(t.start, t.end)}</span></div><button class="btn danger" data-action="remove-trip" data-id="${escapeHtml(t.id)}">Remove</button></div></div>`;
       }).join('') : `<div class="empty-state"><div class="empty-icon">🎣</div><h3>No saved fishing trips</h3><p class="small">Pick a date in the calendar, then select “Save this session”.</p><button class="btn" data-action="open-calendar">Open calendar</button></div>`}</section>
       <p class="hint">Saved trips are stored only in this browser. They do not automatically sync across devices.</p>`;
   }
   function renderTides() {
-    if (isFreshwater()) return `<p class="eyebrow">Freshwater mode</p><h1>Lake Proserpine</h1><p class="lead">Peter Faust Dam does not experience coastal tidal cycles.</p>
+    if (isFreshwater()) return `<p class="eyebrow">Freshwater mode</p><h1>Proserpine Dam</h1><p class="lead">Peter Faust Dam does not experience coastal tidal cycles.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><h2>Why there is no tide chart</h2><p>Lake Proserpine is a freshwater impoundment. This app calculates the sun and moon windows for the lake without adding coastal tides to its five-star rating.</p><p>For barramundi, consider water temperature, wind direction, seasonal changes and local structure alongside these astronomical windows.</p><p>A Queensland Stocked Impoundment Permit is required for line fishing by anglers aged 18 and over.</p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Official Peter Faust Dam fishing information ↗</a></section>`;
+      <section class="card"><h2>Why there is no tide chart</h2><p>Proserpine Dam (Lake Proserpine / Peter Faust Dam) is a freshwater impoundment. This app calculates the sun and moon windows for the lake without adding coastal tides to its five-star rating.</p><p>For barramundi, consider water temperature, wind direction, seasonal changes and local structure alongside these astronomical windows.</p><p>A Queensland Stocked Impoundment Permit is required for line fishing by anglers aged 18 and over.</p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Official Peter Faust Dam fishing information ↗</a></section>`;
     const p = predict(state.selected);
     const station = STATIONS[loc().station];
     return `<p class="eyebrow">Automatic official predictions</p><h1>Tide planner</h1><p class="lead">High and low tides from Queensland Government data, synced through the official Web API with a verified CSV fallback. No manual entry needed.</p>
@@ -221,6 +228,7 @@
         <p class="hint">${nTideDays()} dates currently loaded for this station. Times are predicted, not live measurements. All times use AEST (UTC+10).</p>${stationHint()}
         <div class="divider"></div>${p.tides.length ? tideRows(p) : '<p class="small">No verified high/low predictions for this date. The app will show solunar-only scores until the official data is available.</p>'}
         <div class="actions"><button class="btn secondary" data-action="retry-tides">Check for updated tide files</button></div>
+        <p class="hint">Troubleshooting: <a href="./tide-data/manifest.json" target="_blank" rel="noopener noreferrer">Open tide index</a> · <a href="./tide-data/${loc().station}-${state.selected.slice(0,4)}.json" target="_blank" rel="noopener noreferrer">Open year file</a> · <a href="https://github.com/shfjkhsd2d-star/Solunar-fishing/actions/workflows/sync-tides.yml" target="_blank" rel="noopener noreferrer">Check GitHub tide sync</a>.</p>
       </section>
       <section class="card"><h2>Official source & updates</h2><p class="small">The GitHub Actions job queries the Queensland Government <b>CKAN DataStore Web API</b>, validates the complete annual predicted high/low dataset and uses the official CSV as a fallback if the API is unavailable or incomplete. It checks weekly. These are BOM predictions republished by Maritime Safety Queensland; they are not real-time measurements.</p>
         <p><a href="${station.link}" target="_blank" rel="noopener noreferrer">View QLD Government ${station.name} dataset ↗</a></p>
@@ -229,15 +237,15 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.1</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
-      <p>Lake Proserpine (Peter Faust Dam) has been added as a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>What's new · v3.3</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
       <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts also consider high/low and between-tide movement when official data is available.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
-      <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour is used as a reference for Airlie Beach, Cannonvale and the Proserpine River mouth without applying local corrections. Bowen uses Bowen data.</p>
+      <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour tides are used as an uncorrected coastal reference for Proserpine River Mouth, where estuary tides can arrive at different times and heights. Bowen uses Bowen station data. Proserpine Dam uses no coastal tide data.</p>
         <p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.1 · Official QLD tide Web API + CSV fallback</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.3 · Four selectable locations</p></section>`;
   }
   function render() {
     try {

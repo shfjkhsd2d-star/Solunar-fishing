@@ -1,14 +1,30 @@
-# Solunar / Tide Fishing Planner — v3.1
+# Solunar / Tide Fishing Planner — v3.2
+
+**What this update fixes:** clearer 404 diagnostics, sync on every normal GitHub push, and offline app installation that does not depend on optional tide JSON files. It **does not include guessed tide predictions**, and cannot guarantee the Queensland Government API will permit automated downloading.
+
+## If the Tide screen says HTTP 404 (Version 3.2)
+
+An HTTP 404 from your Render app means the **site** could not supply one of its own `tide-data/` JSON files; it is not proof that the Queensland API itself returned 404. Version 3.2 now shows the specific missing filename.
+
+1. Open `https://solunar-fishing.onrender.com/tide-data/manifest.json` in Safari. If that says 404, `tide-data/manifest.json` is not in the deployed publish directory. Upload this folder and verify Render's publish directory is `.`.
+2. If it opens and shows `"stations": {}`, the index exists **but has no annual predictions yet**. The initial ZIP intentionally contains an empty index. Open GitHub **Actions → Sync official Queensland tide predictions → Run workflow** on `main`.
+3. Check the workflow log. Green completion with real data should add `tide-data/shute-2026.json` and/or `tide-data/bowen-2026.json` and update `manifest.json`. If the API and CSV downloads are blocked, the log will report the reason. **Do not upload mock/test tide files as real predictions.**
+4. Open `https://solunar-fishing.onrender.com/tide-data/shute-2026.json`. If GitHub contains this file but Render returns 404, check that Render deployed the latest data commit and is publishing the repository root (not an old nested folder).
+5. After the two real files are accessible from Render, tap **Check for updated tide files** in the app. If the screen is stale on iPhone, fully close and reopen the Home Screen app or refresh Safari.
+
+The corrected GitHub Actions workflow also runs on an ordinary push to `main`, not just edits to two specific workflow files. The app keeps solunar-only ratings when tide data is absent; it will **not** fabricate tide times to hide the error.
+
+**Current testing limitation:** The Queensland government's CSV download returned an automated-access verification challenge in this environment. Until a green GitHub Actions run publishes genuine JSON, automatic tide integration cannot be claimed to be working.
 
 An installable, mobile-friendly static web app for the Whitsundays and Peter Faust Dam.
 
-**New in v3.1:** Official Queensland Government **CKAN DataStore Web API** is the preferred tide source. The sync paginates through API records and validates a complete annual high/low prediction dataset; if the API is blocked, incomplete, or unavailable, it tries the official government CSV. Lake Proserpine remains a freshwater location. No user CSV imports or tide entry are necessary once either official source succeeds.
+**Updated in v3.3:** Official Queensland Government **CKAN DataStore Web API** is the preferred tide source. The sync paginates through API records and validates a complete annual high/low prediction dataset; if the API is blocked, incomplete, or unavailable, it tries the official government CSV. Proserpine Dam (Peter Faust Dam / Lake Proserpine) remains a freshwater location. No user CSV imports or tide entry are necessary once either official source succeeds.
 
 **Important:** The upload ZIP does **not** include invented or sample tide predictions. The first real official tide files are created and committed by a GitHub Actions job after upload. **These files are not pre-populated with sample tides.** If the Queensland portal blocks downloads or has not yet published a future-year CSV, the app labels that date **Solunar only**, rather than manufacturing a high/low tide time. Queensland's 2027 *tide tables* PDF exists but the individual station's annual high/low CSV may not be available yet.
 
 ## How to upload
 
-1. Download and **extract** `Solunar-Fishing-v3.1-QLD-Web-API.zip`.
+1. Download and **extract** `Solunar-Fishing-v3.3-Four-Locations.zip`.
 2. Open [your GitHub repository](https://github.com/shfjkhsd2d-star/Solunar-fishing) on the **main** branch.
 3. Upload the **extracted contents** into the repository root; replace matching files. **Keep the directory structure** exactly as shown below. Don't upload the ZIP unchanged. On desktop, drag the contents of the extracted folder (including the hidden `.github` directory) into **Add file → Upload files**. If using a phone, use GitHub's desktop-site view and make sure the nested folders also upload. GitHub's file-upload control does not always preserve folders selected in a mobile file picker.
 4. Commit the changes. Render will redeploy the app if auto-deploy is enabled. Existing Render **Static Site** settings can stay unchanged (publish directory `.`).
@@ -40,6 +56,7 @@ scripts/
 tests/
   test-core.js
   test-ui.js
+  test-404.js
   test-sync.py
 README.md
 THIRD_PARTY_NOTICES.txt
@@ -56,18 +73,22 @@ THIRD_PARTY_NOTICES.txt
 - **The workflow has been tested with simulated API responses and mock official-format CSVs. This development environment could not connect to the live QLD Web API or CSV endpoints, so actual external access must be verified in GitHub Actions after your first upload.** If both API and CSV downloads fail (for example due to access restrictions), the workflow fails transparently and the app remains solunar-only rather than displaying fake tide values.
 - If one year's official CSV is not available, no file is created for that year; the calendar displays only astronomical scores. Data from older successfully downloaded years is retained when a temporary connection problem occurs.
 
-## Available locations
+## Available locations — v3.3
+
+The app has **exactly four choices** in the Today, Calendar and Tides location picker, in this order:
 
 | Fishing location | Tide behaviour |
 |---|---|
-| Shute Harbour | Official Shute Harbour station |
-| Airlie Beach | Shute Harbour **reference**, no local phase correction |
-| Cannonvale | Shute Harbour **reference**, no local phase correction |
-| Proserpine River mouth | Shute Harbour **reference**, not river-mouth tides |
-| Bowen | Official Bowen station |
-| Lake Proserpine (Peter Faust Dam) | **Freshwater** — no ocean tidal influence; uses sun/moon only |
+| Bowen | Official Bowen tide station (once synced) |
+| Proserpine Dam | **Freshwater** (Peter Faust Dam / Lake Proserpine); no ocean tides, solunar only |
+| Shute Harbour | Official Shute Harbour tide station (once synced) |
+| Proserpine River Mouth | Shute Harbour station used as **uncorrected reference only**; no measured river-mouth tide predictions |
 
-The reference station is especially approximate in estuaries where tide timing and water movement can be very different. Lake Proserpine is a Stocked Impoundment Permit Scheme (SIPS) location; adults aged 18+ need a permit to line fish. See the [official Queensland Peter Faust Dam page](https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust).
+Airlie Beach and Cannonvale can no longer be selected. Previously saved trips at those places are still visible as **previous location** records and may be removed, so the update does not silently discard existing trip history. If one of those locations was selected in an older version, the initial active location resets to Shute Harbour.
+
+**Important:** Shute Harbour water levels and timing may differ considerably from conditions inside the Proserpine River estuary. No local tide correction has been applied. The tidal data sync still depends on a successful live Queensland API or CSV download through GitHub Actions, and the `HTTP 404` problem will persist until verified data files are generated and served by Render. Do not treat this location-choice update as proof that government tide data is syncing.
+
+Proserpine Dam is a Stocked Impoundment Permit Scheme (SIPS) location; adults aged 18+ need a permit to line fish. See the [official Queensland Peter Faust Dam page](https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust).
 
 ## Scores and limitations
 
@@ -91,6 +112,8 @@ The reference station is especially approximate in estuaries where tide timing a
 ```sh
 node tests/test-core.js
 node tests/test-ui.js
+node tests/test-404.js
+node tests/test-locations.js
 python tests/test-sync.py
 ```
 
@@ -103,7 +126,7 @@ These include simulated **multi-page Web API**, **incomplete-API-to-CSV fallback
 - **GitHub workflow says read-only:** in GitHub **Settings → Actions → General → Workflow permissions**, set **Read and write permissions** if you control the repository. The workflow itself also requests `contents: write`.
 - **Main branch is not your default branch:** edit `.github/workflows/sync-tides.yml` to use your current branch instead of `main`.
 - **Future months are solunar only:** government may have published only the printed tide table PDF, not the station’s API/CSV annual resource. Do not infer tide times from a neighbouring year.
-- **Lake Proserpine shows no tides:** correct and intentional — it's a freshwater reservoir.
+- **Proserpine Dam shows no tides:** correct and intentional — it's a freshwater reservoir.
 - **Government API and CSV both blocked:** the app won't present unverified data; this needs an alternative licensed, server-accessible source or permissioned feed.
 
 ## Web API integration details (v3.1)
