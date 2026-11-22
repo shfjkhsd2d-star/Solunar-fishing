@@ -1,6 +1,6 @@
 /* Cache the app shell without requiring optional tide-data files. */
-const CACHE_NAME = 'solunar-tide-v3.3-20261122-a';
-const FILES = ['./', './index.html', './styles.css?v=3.3', './astro.js?v=3.3', './tides.js?v=3.3', './app.js?v=3.3', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE_NAME = 'solunar-tide-v3.6-20261122-a';
+const FILES = ['./', './index.html', './styles.css?v=3.6', './astro.js?v=3.6', './tides.js?v=3.6', './weather.js?v=3.6', './app.js?v=3.6', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
 });

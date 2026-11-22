@@ -29,3 +29,32 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;z-index:9;background:#092333f7;border-top:1px solid #2c4e60;backdrop-filter:blur(16px);padding:8px 6px calc(8px + env(safe-area-inset-bottom))}.nav-inner{max-width:650px;margin:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px}.nav-item{color:#8faebc;background:transparent;border:none;border-radius:11px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 2px;font-size:10px;min-height:51px}.nav-item>span:first-child{font-size:19px;line-height:1}.nav-item.active{color:var(--mint);background:#153d4f;font-weight:800}
 .no-script{padding:20px;text-align:center;color:#fff}
 @media(min-width:520px){.nav-item{flex-direction:row;justify-content:center;font-size:13px}.nav-item>span:first-child{font-size:16px}.shell{padding-left:24px;padding-right:24px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+/* Weather panel — v3.6. Responsive hour-by-hour wind forecast. */
+.weather-card{border-color:#367185;background:linear-gradient(165deg,#12394d,#0a2535 75%)}
+.weather-card h2{margin:0}
+.weather-location{font-size:12px;margin:10px 0 16px;color:#bbdce7}
+.weather-now-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(110px,1fr);gap:12px;border:1px solid #387285;background:linear-gradient(140deg,#18506a,#0d3145);padding:15px;border-radius:15px}
+.weather-now-label{font-size:12px;color:#cee5ec;line-height:1.6}
+.weather-now-speed{font-size:45px;font-weight:850;color:#f6fafb;letter-spacing:-1.5px;line-height:1.2;margin:5px 0}
+.weather-now-speed span{font-size:15px;font-weight:650;letter-spacing:0;color:#b7d8e5}
+.weather-now-side{border-left:1px solid #487e8d;padding-left:12px;display:flex;flex-direction:column;justify-content:center;gap:7px;color:#c0e2e6;font-size:12px}
+.weather-now-side div:first-child{font-size:27px;font-weight:850;color:#fff}
+.weather-hours-header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px;margin:18px 0 8px;color:#e1f8f7;font-size:13px}
+.weather-hours-header span{color:var(--sub);font-size:11px}
+.weather-hour-list{border-radius:12px;border:1px solid #2e6475;overflow:hidden;background:#092737}
+.weather-hour-row{display:grid;grid-template-columns:46px minmax(0,1.6fr) minmax(53px,.8fr) minmax(45px,.65fr);gap:8px;align-items:center;padding:10px 9px;border-bottom:1px solid #224b5b;font-size:12px}
+.weather-hour-row:last-child{border-bottom:0}
+.weather-hour-row:nth-child(even){background:#102f40}
+.weather-hour-row.current{background:#184859;box-shadow:inset 3px 0 var(--mint)}
+.weather-hour-time{font-weight:750;color:#e5f7fa;font-size:11px}
+.weather-hour-time small,.weather-hour-wind small,.weather-hour-gust small,.weather-hour-more small{display:block;font-size:10px;color:#9dbdc9;line-height:1.6;white-space:nowrap;font-weight:450}
+.weather-hour-time small{color:var(--mint);font-weight:750}
+.weather-hour-wind{display:flex;gap:6px;align-items:center;min-width:0}
+.weather-hour-wind strong{white-space:nowrap;font-weight:800;color:#f4ffff;font-size:12px}
+.wind-direction-arrow{color:#70d9e9;font-size:17px;line-height:1;display:inline-block;flex-shrink:0;transform-origin:50% 50%}
+.weather-hour-gust{text-align:right;color:#d9ebf4}
+.weather-hour-gust strong,.weather-hour-more span{font-size:11px;white-space:nowrap;font-weight:700}
+.weather-hour-more{text-align:right;color:#c1dfef}
+.weather-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.weather-actions .btn{flex:1;min-width:130px;font-size:11px;padding:9px 7px}
+@media(max-width:360px){.weather-hour-row{grid-template-columns:40px minmax(0,1.5fr) minmax(50px,.8fr) minmax(43px,.6fr);gap:4px;padding:9px 5px}.weather-hour-wind strong{font-size:11px}.weather-hour-wind{gap:4px}.weather-hour-more small{font-size:9px}.wind-direction-arrow{font-size:14px}.weather-now-speed{font-size:40px}}
