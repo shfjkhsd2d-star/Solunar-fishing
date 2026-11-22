@@ -79,3 +79,27 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .movement-chart svg{display:block;width:100%;height:108px;overflow:visible}
 .movement-axis{display:flex;justify-content:space-between;gap:2px;color:#b9d7dc;font-size:10px;margin-top:5px}
 @media(max-width:375px){.movement-stats{gap:5px}.movement-stats>div{padding:8px 5px}.movement-stats strong{font-size:14px}.movement-stats span{font-size:9px}.movement-chart svg{height:90px}}
+
+/* v3.11 — compact scrollable hourly wind forecast, iPhone-friendly. */
+.weather-hour-list{
+  max-height:228px;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;
+  scrollbar-width:thin;scrollbar-color:#4b8391 #092737;
+}
+.weather-hour-list:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+.weather-hour-list::-webkit-scrollbar{width:5px}
+.weather-hour-list::-webkit-scrollbar-thumb{background:#4b8391;border-radius:4px}
+.weather-hour-list::-webkit-scrollbar-track{background:#092737}
+.weather-scroll-note{color:#91b9c4;font-size:11px;margin-top:7px;text-align:center}
+.weather-actions{justify-content:flex-end}
+.weather-actions .btn{flex:0 1 auto;min-width:120px}
+/* Tidal-score selector belongs inside the score card to avoid an extra panel. */
+.tide-score-control{margin:13px 0 0;padding:12px;border:1px solid #2f6571;border-radius:13px;background:#0a2b3c}
+.tide-score-row{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap}
+.tide-score-label{font-size:12px;font-weight:750;color:#c8e7e7}
+.tide-score-switch{display:inline-flex;gap:3px;padding:3px;border:1px solid #397082;border-radius:11px;background:#072333}
+.tide-score-option{border:0;background:transparent;border-radius:8px;color:#bad5dc;font-size:12px;font-weight:750;padding:8px 10px;min-height:36px;white-space:nowrap}
+.tide-score-option.selected{color:#07303b;background:var(--mint)}
+.tide-score-option:not(.selected):hover{background:#1d4b5d;color:#fff}
+.tide-score-explain{margin:8px 0 0;font-size:11px;line-height:1.4;color:#a6c6ce}
+@media(max-width:360px){.weather-hour-list{max-height:213px}.tide-score-control{padding:10px}.tide-score-option{padding:8px}}

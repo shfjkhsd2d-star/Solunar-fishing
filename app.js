@@ -47,12 +47,13 @@
     intervalLoaded: new Set(), intervalLoading: new Set(),
     loadedYears: new Set(), loadingYears: new Set(), yearErrors: {},
     flash: '',
-    weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {}, weatherExpanded: false,
-    windUnit: persistent.windUnit === 'kn' ? 'kn' : 'kmh'
+    weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {},
+    windUnit: persistent.windUnit === 'kn' ? 'kn' : 'kmh',
+    tideScoringMode: persistent.tideScoringMode === 'highlow' ? 'highlow' : 'interval'
   };
   function saveState() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ locId: state.locId, trips: state.trips, tides: state.tides, windUnit: state.windUnit }));
+      localStorage.setItem(KEY, JSON.stringify({ locId: state.locId, trips: state.trips, tides: state.tides, windUnit: state.windUnit, tideScoringMode: state.tideScoringMode }));
       return true;
     } catch {
       state.flash = 'Unable to save on this device. Check that browser storage is available.';
@@ -65,7 +66,9 @@
   const isOfficial = key => !isFreshwater() && !!state.official[loc().station]?.[key];
   const intervalMap = () => isFreshwater() ? {} : state.intervals[loc().station] || {};
   const hasInterval = key => !isFreshwater() && Array.isArray(intervalMap()[key]);
-  const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap(), intervalMap());
+  // Keep loading both datasets. The selected mode only controls which coastal tide component affects ratings.
+  const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap(),
+    state.tideScoringMode === 'highlow' ? {} : intervalMap());
   const nTideDays = () => Object.keys(tideMap()).length;
   const sourceStatus = p => isFreshwater() ? 'Freshwater · sun and moon only · no ocean tide influence' :
     p.intervalUsed ? 'Sun + moon + verified QLD 10-minute predicted water-level movement' :
@@ -254,7 +257,8 @@
     const data = entry.data;
     const hour = AEST_HOUR();
     const now = Weather.nearestHour(data, hour);
-    const rows = state.weatherExpanded ? data.hours : data.hours.filter(r => r.hour >= Math.min(6,hour) && r.hour <= Math.max(21,hour));
+    // Display all available hours inside a bounded, touch-scrollable area.
+    const rows = data.hours;
     const renderRow = r => `<div class="weather-hour-row${r.hour===hour ? ' current' : ''}">
       <div class="weather-hour-time">${localHourText(r.hour)}${r.hour===hour ? '<small>Now</small>' : ''}</div>
       <div class="weather-hour-wind"><span class="wind-direction-arrow" aria-hidden="true" style="transform:rotate(${Math.round((r.direction+180)%360)}deg)">↑</span><div><strong>${escapeHtml(r.compass)} · ${windReading(r.speed)}</strong><small>Wind from ${escapeHtml(r.compass)}</small></div></div>
@@ -271,8 +275,9 @@
         <div class="weather-now-side"><div>${now.temp == null ? '—' : Math.round(now.temp) + '°C'}</div><div>${escapeHtml(Weather.condition(now.code))}</div><div>Rain ${now.rain == null ? '—' : Math.round(now.rain) + '%'}</div></div>
       </div>
       <div class="weather-hours-header"><strong>Hour-by-hour wind</strong><span>Speed · direction · gusts</span></div>
-      <div class="weather-hour-list" aria-label="Hourly wind speed, direction and gust forecast">${rows.map(renderRow).join('')}</div>
-      <div class="weather-actions"><button class="btn secondary" data-action="toggle-weather">${state.weatherExpanded ? 'Show daytime hours' : 'Show all 24 hours'}</button><button class="btn outline" data-action="retry-weather">Refresh forecast</button></div>
+      <div class="weather-hour-list" data-hourly-scroll data-location="${escapeHtml(id)}" tabindex="0" role="region" aria-label="Scrollable hourly wind speed, direction and gust forecast">${rows.map(renderRow).join('')}</div>
+      <div class="weather-scroll-note">↕ Scroll for the full 24-hour forecast · current hour highlighted</div>
+      <div class="weather-actions"><button class="btn outline" data-action="retry-weather">Refresh forecast</button></div>
       ${error ? `<p class="notice warning">Unable to update weather: ${escapeHtml(error)}. Showing the previously loaded forecast, which may be out of date.</p>` : ''}
       <p class="hint">Wind direction is where the wind <b>comes from</b>. Arrow shows where it blows. Checked ${escapeHtml(lastUpdated)} AEST. Weather is not included in the five-star score yet.</p>${source}
     </section>`;
@@ -286,11 +291,30 @@
     state.flash = '';
     return msg ? `<div class="notice" role="status">${escapeHtml(msg)}</div>` : '';
   }
+  function tideScoringControl(p) {
+    if (isFreshwater()) return '';
+    const intervalChosen = state.tideScoringMode === 'interval';
+    let note;
+    if (intervalChosen && p.intervalUsed) note = 'Using verified 10-minute water-height changes in the fishing score.';
+    else if (intervalChosen && p.hasHighLow) note = '10-minute data unavailable for this date; using high/low tides automatically.';
+    else if (intervalChosen) note = 'Tide data unavailable for this date; using sun and moon only.';
+    else if (p.hasHighLow) note = 'Using predicted high/low tide times. Detailed tide data remains available under Tides.';
+    else note = 'High/low data unavailable for this date; using sun and moon only.';
+    return `<div class="tide-score-control">
+      <div class="tide-score-row"><span class="tide-score-label">Tide scoring method</span>
+        <div class="tide-score-switch" role="group" aria-label="Tide scoring method">
+          <button type="button" data-action="set-tide-scoring-mode" data-mode="interval" aria-pressed="${intervalChosen}" class="tide-score-option${intervalChosen ? ' selected' : ''}">10-min</button>
+          <button type="button" data-action="set-tide-scoring-mode" data-mode="highlow" aria-pressed="${!intervalChosen}" class="tide-score-option${!intervalChosen ? ' selected' : ''}">High / low</button>
+        </div>
+      </div><p class="tide-score-explain" role="status">${escapeHtml(note)}</p>
+    </div>`;
+  }
   function scoreCard(p, date, withSave = true) {
     return `<article class="card">
       <div class="eyebrow">${escapeHtml(fullDate(date))}</div>
       <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${isFreshwater() ? 'Freshwater' : p.intervalUsed ? '10-min QLD movement' : isOfficial(date) ? 'Official QLD tides' : p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
       <p class="small">${escapeHtml(sourceStatus(p))}. A <b>relative planning score</b>, not a catch probability or guaranteed result.</p>
+      ${tideScoringControl(p)}
       ${withSave ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button>` : ''}</div>` : ''}
     </article>`;
   }
@@ -327,17 +351,19 @@
   }
   function movementCard(p) {
     if (isFreshwater()) return '';
-    if (!p.intervalUsed) return `<section class="card movement-card"><div class="row"><h2>≈ 10-minute tide movement</h2><span class="score-badge">High/low fallback</span></div>
+    if (!hasInterval(p.key)) return `<section class="card movement-card"><div class="row"><h2>≈ 10-minute tide movement</h2><span class="score-badge">High/low fallback</span></div>
       <p class="small">${escapeHtml(intervalStatus(p.key.slice(0, 4)))}. ${p.hasHighLow ? 'Your current score still uses the working high/low tide model.' : 'The current score uses sun/moon only.'}</p>
       <p class="hint">When a complete official 10-minute year is published, this section will show predicted water-level changes and use them to refine the rating.</p></section>`;
     const readings = intervalMap()[p.key];
     const preferred = [...p.windows].sort((a,b)=>b.score-a.score)[0];
-    const rate = preferred?.movement || null;
+    const analysis = window.SolunarMovement?.build(readings);
+    const minuteOfBestWindow = preferred ? Math.round((preferred.start + 3600000 - Astro.dayStart(p.key)) / 60000) : null;
+    const rate = minuteOfBestWindow === null ? null : analysis?.atMinute(minuteOfBestWindow) || null;
     const width = 320, height = 90, left = 12, right = 308, top = 8, bottom = 78;
     const minimum = Math.min(...readings), maximum = Math.max(...readings), span = Math.max(.1, maximum - minimum);
     const pts = readings.map((h,i)=>`${(left + i / 143 * (right - left)).toFixed(1)},${(bottom - (h-minimum)/span*(bottom-top)).toFixed(1)}`).join(' ');
     return `<section class="card movement-card" aria-label="10-minute predicted tidal water levels for ${escapeHtml(loc().name)}">
-      <div class="row wrap"><h2>≈ 10-minute tide movement</h2><span class="score-badge">Official forecast</span></div>
+      <div class="row wrap"><h2>≈ 10-minute tide movement</h2><span class="score-badge">${state.tideScoringMode === 'interval' ? 'Used in score' : 'Reference only'}</span></div>
       <div class="movement-stats">
         <div><span>Best-window height change</span><strong>${rate ? `${rate.rate > 0 ? '+' : ''}${rate.rate.toFixed(2)} m/h` : '—'}</strong></div>
         <div><span>Water level</span><strong>${rate ? (rate.direction === 'rising' ? 'Rising' : rate.direction === 'falling' ? 'Falling' : 'Changing slowly') : '—'}</strong></div>
@@ -354,8 +380,7 @@
       <div class="card soft">${locationPicker()}</div>${flash()}
       ${scoreCard(p,date)}
       ${weatherCard()}
-      ${movementCard(p)}
-      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Windows favour moon transit/rise/set and sunrise/sunset. Verified 10-minute predictions replace rough high/low tidal-movement estimates when available. Freshwater locations never use ocean tides.</p></section>
+      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Fishing scores use the selected tide method, moon events and dawn/dusk. For detailed tidal movement data, open the Tides tab. Freshwater locations never use ocean tides.</p></section>
       ${eventsCard(p)}${tideCard(p)}
       <div class="notice warning">Fishing activity is influenced by weather, habitat, water clarity and local conditions, not just tides or the moon. Check official forecasts and fishing regulations before leaving.</div>`;
   }
@@ -397,7 +422,7 @@
     const station = STATIONS[loc().station];
     return `<p class="eyebrow">Automatic official predictions</p><h1>Tide planner</h1><p class="lead">High and low tides from Queensland Government data, synced through the official Web API with a verified CSV fallback. No manual entry needed.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><div class="row"><h2>${station.name} tide station</h2><span class="score-badge">${p.intervalUsed ? '10-min QLD' : isOfficial(state.selected) ? 'Official QLD' : p.hasTides ? 'Legacy import' : 'Solunar only'}</span></div>
+      <section class="card"><div class="row"><h2>${station.name} tide station</h2><span class="score-badge">${hasInterval(state.selected) ? '10-min available' : isOfficial(state.selected) ? 'Official QLD' : p.hasTides ? 'Legacy import' : 'Solunar only'}</span></div>
         <label for="tide-date">Date</label><input type="date" id="tide-date" value="${state.selected}">
         <div class="notice">${escapeHtml(tideStatus(state.selected.slice(0,4)))}</div>
         ${isOfficial(state.selected) ? `<p class="hint">Data channel: <b>${escapeHtml(state.manifest?.stations?.[loc().station]?.years?.[state.selected.slice(0,4)]?.source_method || 'Official Queensland dataset')}</b></p>` : ''}
@@ -414,19 +439,32 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.10</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
-      <p>Verified 10-minute predicted heights now refine the tidal component of coastal five-star scores. If the complete interval dataset is unavailable, the app retains high/low-based scoring. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The Today screen now shows hourly wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>What's new · v3.11</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Choose whether coastal fishing scores use verified 10-minute water-height changes or predicted high/low tide times. The selection is saved on your device. The 10-minute method falls back to high/low when its data is missing. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The compact Today weather panel contains a scrollable 24-hour wind forecast with wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
       <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts use verified 10-minute water-height changes when available; otherwise they retain high/low timing and midpoint estimates.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
       <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour uses Shute Harbour station predictions. Bowen uses Bowen station predictions. Proserpine Dam uses no coastal tide data.</p>
         <p>Weather: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.10 · 10-minute tide movement · Hourly weather + unit toggle · Three selectable locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.11 · Selectable tide scoring · Scrollable hourly wind · Three locations</p></section>`;
   }
   function render() {
     try {
+      const oldScroll = document.querySelector?.('[data-hourly-scroll]');
+      const scrollMemory = oldScroll ? { location: oldScroll.dataset.location, offset: oldScroll.scrollTop } : null;
       app.innerHTML = ({ today: renderToday, calendar: renderCalendar, trips: renderTrips, tides: renderTides, about: renderAbout }[state.tab] || renderToday)();
+      const nextScroll = document.querySelector?.('[data-hourly-scroll]');
+      if (nextScroll) {
+        if (scrollMemory && scrollMemory.location === nextScroll.dataset.location) {
+          nextScroll.scrollTop = scrollMemory.offset;
+        } else {
+          const currentRow = nextScroll.querySelector('.weather-hour-row.current');
+          if (currentRow) {
+            nextScroll.scrollTop = Math.max(0, currentRow.getBoundingClientRect().top - nextScroll.getBoundingClientRect().top - 45);
+          }
+        }
+      }
       document.querySelectorAll('[data-tab]').forEach(btn => {
         const active = btn.dataset.tab === state.tab;
         btn.classList.toggle('active', active);
@@ -485,7 +523,15 @@
         }
         break;
       }
-      case 'toggle-weather': state.weatherExpanded = !state.weatherExpanded; render(); break;
+      case 'set-tide-scoring-mode': {
+        const mode = target.dataset.mode;
+        if ((mode === 'interval' || mode === 'highlow') && mode !== state.tideScoringMode) {
+          state.tideScoringMode = mode;
+          saveState();
+          render(); // Both datasets remain loaded; only score inputs change.
+        }
+        break;
+      }
       case 'retry-weather': { state.weatherErrors[loc().id] = ''; syncVisibleWeather(true); break; }
       case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); state.intervalManifestPromise = null; state.intervalManifest = null; state.intervalErrors = {}; state.intervals = {}; state.intervalLoaded.clear(); refresh(); break; }
     }
