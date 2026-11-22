@@ -58,3 +58,12 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .weather-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .weather-actions .btn{flex:1;min-width:130px;font-size:11px;padding:9px 7px}
 @media(max-width:360px){.weather-hour-row{grid-template-columns:40px minmax(0,1.5fr) minmax(50px,.8fr) minmax(43px,.6fr);gap:4px;padding:9px 5px}.weather-hour-wind strong{font-size:11px}.weather-hour-wind{gap:4px}.weather-hour-more small{font-size:9px}.wind-direction-arrow{font-size:14px}.weather-now-speed{font-size:40px}}
+
+/* v3.7: accessible, responsive km/h / knots selector for today's wind forecast. */
+.wind-unit-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 0 4px;flex-wrap:wrap}
+.wind-unit-label{color:#bbdce7;font-size:12px;font-weight:700}
+.wind-unit-switch{display:inline-flex;gap:3px;padding:3px;border:1px solid #397082;border-radius:11px;background:#082837}
+.wind-unit-option{border:0;border-radius:8px;background:transparent;color:#b8d6e2;font-size:12px;font-weight:750;padding:8px 12px;min-height:36px;min-width:58px}
+.wind-unit-option.selected{color:#07303b;background:var(--mint)}
+.wind-unit-option:not(.selected):hover{background:#1d4b5d;color:#f2ffff}
+@media(max-width:360px){.wind-unit-option{padding:7px 9px;min-width:52px}}

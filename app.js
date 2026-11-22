@@ -46,11 +46,12 @@
     manifest: null, manifestError: '', manifestPromise: null,
     loadedYears: new Set(), loadingYears: new Set(), yearErrors: {},
     flash: '',
-    weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {}, weatherExpanded: false
+    weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {}, weatherExpanded: false,
+    windUnit: persistent.windUnit === 'kn' ? 'kn' : 'kmh'
   };
   function saveState() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ locId: state.locId, trips: state.trips, tides: state.tides }));
+      localStorage.setItem(KEY, JSON.stringify({ locId: state.locId, trips: state.trips, tides: state.tides, windUnit: state.windUnit }));
       return true;
     } catch {
       state.flash = 'Unable to save on this device. Check that browser storage is available.';
@@ -164,15 +165,30 @@
       })
       .finally(() => { state.weatherLoading.delete(id); if (state.tab === 'today' && loc().id === id) render(); });
   }
+  // Open-Meteo's request always uses km/h; convert displayed wind values only.
+  // 1 international knot is exactly 1.852 km/h.
+  const windUnitLabel = () => state.windUnit === 'kn' ? 'kn' : 'km/h';
+  const windNumber = speed => speed == null ? '—' : state.windUnit === 'kn'
+    ? (Math.round(speed / 1.852 * 10) / 10).toFixed(1)
+    : String(Math.round(speed));
+  const windReading = speed => speed == null ? '—' : `${windNumber(speed)} ${windUnitLabel()}`;
+  function windUnitControl() {
+    return `<div class="wind-unit-row"><span class="wind-unit-label">Wind units</span>
+      <div class="wind-unit-switch" role="group" aria-label="Wind speed units">
+        <button type="button" data-action="set-wind-unit" data-unit="kmh" aria-pressed="${state.windUnit === 'kmh'}" class="wind-unit-option${state.windUnit === 'kmh' ? ' selected' : ''}">km/h</button>
+        <button type="button" data-action="set-wind-unit" data-unit="kn" aria-pressed="${state.windUnit === 'kn'}" class="wind-unit-option${state.windUnit === 'kn' ? ' selected' : ''}">knots</button>
+      </div>
+    </div>`;
+  }
   function weatherCard() {
     const id = loc().id;
     const entry = state.weatherByLoc[id];
     const isCurrent = entry?.data?.day === todayKey();
     const error = state.weatherErrors[id];
     const source = `<p class="hint">Forecast model via <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a>, not a live BOM observation. For official marine forecasts and warnings, see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a>. Conditions on the water may be different.</p>`;
-    if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2><p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${source}</section>`;
+    if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2>${windUnitControl()}<p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${source}</section>`;
     if (!isCurrent) return `<section class="card weather-card"><div class="row"><h2>🌬️ Today's wind & weather</h2><span class="score-badge">Forecast</span></div>
-      <p class="small">${state.weatherLoading.has(id) ? 'Loading hourly wind forecast…' : error ? `Weather temporarily unavailable: ${escapeHtml(error)}` : 'Waiting for the latest weather forecast…'}</p>
+      ${windUnitControl()}<p class="small">${state.weatherLoading.has(id) ? 'Loading hourly wind forecast…' : error ? `Weather temporarily unavailable: ${escapeHtml(error)}` : 'Waiting for the latest weather forecast…'}</p>
       ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${source}</section>`;
     const data = entry.data;
     const hour = AEST_HOUR();
@@ -180,16 +196,17 @@
     const rows = state.weatherExpanded ? data.hours : data.hours.filter(r => r.hour >= Math.min(6,hour) && r.hour <= Math.max(21,hour));
     const renderRow = r => `<div class="weather-hour-row${r.hour===hour ? ' current' : ''}">
       <div class="weather-hour-time">${localHourText(r.hour)}${r.hour===hour ? '<small>Now</small>' : ''}</div>
-      <div class="weather-hour-wind"><span class="wind-direction-arrow" aria-hidden="true" style="transform:rotate(${Math.round((r.direction+180)%360)}deg)">↑</span><div><strong>${escapeHtml(r.compass)} · ${Math.round(r.speed)} km/h</strong><small>Wind from ${escapeHtml(r.compass)}</small></div></div>
-      <div class="weather-hour-gust"><strong>${r.gust == null ? '—' : Math.round(r.gust) + ' km/h'}</strong><small>gusts</small></div>
+      <div class="weather-hour-wind"><span class="wind-direction-arrow" aria-hidden="true" style="transform:rotate(${Math.round((r.direction+180)%360)}deg)">↑</span><div><strong>${escapeHtml(r.compass)} · ${windReading(r.speed)}</strong><small>Wind from ${escapeHtml(r.compass)}</small></div></div>
+      <div class="weather-hour-gust"><strong>${windReading(r.gust)}</strong><small>gusts</small></div>
       <div class="weather-hour-more"><span>${r.temp == null ? '—' : Math.round(r.temp) + '°C'}</span><small>Rain ${r.rain == null ? '—' : Math.round(r.rain) + '%'}</small></div>
     </div>`;
     const lastUpdated = new Date(entry.loadedAt).toLocaleTimeString('en-AU', {timeZone:'Australia/Brisbane',hour:'numeric',minute:'2-digit',hour12:true});
     return `<section class="card weather-card" aria-label="Hourly wind forecast for ${escapeHtml(loc().name)}">
       <div class="row wrap"><h2>🌬️ Today's wind & weather</h2><span class="score-badge">Hourly · AEST</span></div>
+      ${windUnitControl()}
       <p class="weather-location">📍 ${escapeHtml(loc().name)} · ${escapeHtml(fullDate(todayKey()))}</p>
       <div class="weather-now-grid">
-        <div><span class="weather-now-label">Forecast for ${localHourText(now.hour)}</span><div class="weather-now-speed">${Math.round(now.speed)}<span> km/h</span></div><div class="weather-now-label">From ${escapeHtml(now.compass)} · Gusts ${now.gust == null ? '—' : Math.round(now.gust) + ' km/h'}</div></div>
+        <div><span class="weather-now-label">Forecast for ${localHourText(now.hour)}</span><div class="weather-now-speed">${windNumber(now.speed)}<span> ${windUnitLabel()}</span></div><div class="weather-now-label">From ${escapeHtml(now.compass)} · Gusts ${windReading(now.gust)}</div></div>
         <div class="weather-now-side"><div>${now.temp == null ? '—' : Math.round(now.temp) + '°C'}</div><div>${escapeHtml(Weather.condition(now.code))}</div><div>Rain ${now.rain == null ? '—' : Math.round(now.rain) + '%'}</div></div>
       </div>
       <div class="weather-hours-header"><strong>Hour-by-hour wind</strong><span>Speed · direction · gusts</span></div>
@@ -319,7 +336,7 @@
       <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour tides are used as an uncorrected coastal reference for Proserpine River Mouth, where estuary tides can arrive at different times and heights. Bowen uses Bowen station data. Proserpine Dam uses no coastal tide data.</p>
         <p>Weather: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.6 · Hourly weather · Four selectable locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.7 · Hourly weather + wind unit toggle · Four selectable locations</p></section>`;
   }
   function render() {
     try {
@@ -375,6 +392,13 @@
       case 'next-month': moveMonth(1); break;
       case 'save-trip': saveTrip(date); break;
       case 'remove-trip': state.trips=state.trips.filter(t => t.id !== target.dataset.id);saveState();render();break;
+      case 'set-wind-unit': {
+        const unit = target.dataset.unit;
+        if (unit === 'kmh' || unit === 'kn') {
+          if (state.windUnit !== unit) { state.windUnit = unit; saveState(); render(); }
+        }
+        break;
+      }
       case 'toggle-weather': state.weatherExpanded = !state.weatherExpanded; render(); break;
       case 'retry-weather': { state.weatherErrors[loc().id] = ''; syncVisibleWeather(true); break; }
       case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); refresh(); break; }
