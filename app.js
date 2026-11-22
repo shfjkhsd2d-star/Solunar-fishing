@@ -13,7 +13,8 @@
     { id: 'airlie', name: 'Airlie Beach', lat: -20.268, lon: 148.719, station: 'shute' },
     { id: 'cannonvale', name: 'Cannonvale', lat: -20.280, lon: 148.705, station: 'shute' },
     { id: 'bowen', name: 'Bowen', lat: -20.013, lon: 148.245, station: 'bowen' },
-    { id: 'proserpine', name: 'Proserpine River mouth', lat: -20.414, lon: 148.747, station: 'shute' }
+    { id: 'proserpine', name: 'Proserpine River mouth', lat: -20.414, lon: 148.747, station: 'shute' },
+    { id: 'lake-proserpine', name: 'Lake Proserpine (Peter Faust Dam)', lat: -20.368, lon: 148.382, station: null, water: 'freshwater' }
   ];
   const STATIONS = {
     shute: { name: 'Shute Harbour', link: 'https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data' },
@@ -37,7 +38,10 @@
     selected: todayKey(),
     month: todayKey().slice(0, 7),
     trips: Array.isArray(persistent.trips) ? persistent.trips : [],
-    tides: persistent.tides && typeof persistent.tides === 'object' ? persistent.tides : {},
+    tides: persistent.tides && typeof persistent.tides === 'object' ? persistent.tides : {}, // previous manual imports as fallback
+    official: {}, // live data from repo static files, not copied to localStorage
+    manifest: null, manifestError: '', manifestPromise: null,
+    loadedYears: new Set(), loadingYears: new Set(), yearErrors: {},
     flash: ''
   };
   function saveState() {
@@ -50,11 +54,73 @@
     }
   }
   const loc = () => LOCATIONS.find(l => l.id === state.locId) || LOCATIONS[0];
-  const tideMap = () => state.tides[loc().station] || {};
+  const isFreshwater = () => loc().station === null;
+  const tideMap = () => isFreshwater() ? {} : { ...(state.tides[loc().station] || {}), ...(state.official[loc().station] || {}) };
+  const isOfficial = key => !isFreshwater() && !!state.official[loc().station]?.[key];
   const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap());
   const nTideDays = () => Object.keys(tideMap()).length;
-  const sourceStatus = p => p.hasTides ? 'Sun + moon + imported tides' : 'Sun + moon only';
-  const stationHint = () => loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides shown are from <b>${STATIONS[loc().station].name}</b>, a nearby reference port. Local creek and beach times may differ.</p>`;
+  const sourceStatus = p => isFreshwater() ? 'Freshwater · sun and moon only · no ocean tide influence' :
+    !p.hasTides ? 'Sun + moon only; official tides unavailable for this date' :
+      isOfficial(p.key) ? 'Sun + moon + QLD Government predicted tides' : 'Sun + moon + previously imported tides';
+  const stationHint = () => isFreshwater() || loc().id === 'shute' || loc().id === 'bowen' ? '' : `<p class="hint">Tides use <b>${STATIONS[loc().station].name}</b> as a <b>reference port only</b>. Local creek and beach times may differ; no location-specific correction has been applied.</p>`;
+  const tideStatus = year => {
+    if (isFreshwater()) return 'Not applicable to freshwater';
+    const key = `${loc().station}-${year}`;
+    if (state.loadingYears.has(key)) return 'Checking official tide predictions…';
+    if (state.yearErrors[key]) return `Official data not loaded: ${state.yearErrors[key]}`;
+    if (state.loadedYears.has(key)) return `${nTideDays()} days available for ${STATIONS[loc().station].name} (all loaded years)`;
+    if (state.manifestError) return `Tide source unavailable: ${state.manifestError}`;
+    if (state.manifest?.stations?.[loc().station]?.years?.[year]) return 'Official file available · loading…';
+    if (state.manifest) return `No complete official QLD prediction synced for ${year}; solunar-only scoring`;
+    return 'Looking for Queensland Government tide predictions…';
+  };
+
+  function manifestLoad() {
+    if (state.manifestPromise) return state.manifestPromise;
+    state.manifestPromise = fetch('./tide-data/manifest.json', { cache: 'no-store' })
+      .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return resp.json(); })
+      .then(data => { if (data.schema !== 1 || !data.stations) throw new Error('Invalid tide index'); state.manifest = data; return data; })
+      .catch(error => { state.manifestError = error.message || 'Network unavailable'; throw error; });
+    return state.manifestPromise;
+  }
+  async function loadOfficial(station, year) {
+    if (!station) return;
+    const k = `${station}-${year}`;
+    if (state.loadedYears.has(k) || state.loadingYears.has(k) || state.yearErrors[k]) return;
+    state.loadingYears.add(k);
+    render();
+    try {
+      const manifest = await manifestLoad();
+      const entry = manifest.stations?.[station]?.years?.[year];
+      if (!entry) { state.yearErrors[k] = `No ${year} file in the published QLD data feed`; return; }
+      const expectedFile = `./tide-data/${station}-${year}.json`;
+      if (entry.file !== expectedFile) throw new Error('Unexpected tide file path');
+      const resp = await fetch(expectedFile, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const obj = await resp.json();
+      if (obj.schema !== 1 || obj.station !== station || obj.year !== +year || !/^https:\/\/(?:[a-z0-9-]+\.)*qld\.gov\.au\//i.test(obj.source_url || '') || !obj.byDate || Object.keys(obj.byDate).length < 350) {
+        throw new Error('Invalid official tide data');
+      }
+      const converted = {};
+      for (const [day, list] of Object.entries(obj.byDate)) {
+        if (!(day.startsWith(`${year}-`) && /^\d{4}-\d{2}-\d{2}$/.test(day)) || !Array.isArray(list) || list.length < 2 || list.length > 6) throw new Error('Invalid tide date/events');
+        converted[day] = list.map(item => {
+          if (!Number.isFinite(item.time) || !['high','low'].includes(item.type) || !Number.isFinite(item.height)) throw new Error('Invalid tide event');
+          return { time: item.time, type: item.type, height: item.height };
+        });
+      }
+      (state.official[station] ||= {});
+      state.official[station] = Tides.merge(state.official[station], converted);
+      state.loadedYears.add(k);
+    } catch (error) { state.yearErrors[k] = error.message || 'Unable to load official predictions'; }
+    finally { state.loadingYears.delete(k); render(); }
+  }
+  function syncVisibleTides() {
+    if (isFreshwater()) return;
+    const year = state.tab === 'today' ? todayKey().slice(0,4) : state.selected.slice(0,4);
+    void loadOfficial(loc().station, year);
+  }
+  function refresh() { render(); syncVisibleTides(); }
   function locationPicker() {
     return `<label for="location-select">Fishing location</label><select id="location-select">${LOCATIONS.map(l => `<option value="${l.id}"${l.id === state.locId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select>`;
   }
@@ -66,9 +132,9 @@
   function scoreCard(p, date, withSave = true) {
     return `<article class="card">
       <div class="eyebrow">${escapeHtml(fullDate(date))}</div>
-      <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
+      <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${isFreshwater() ? 'Freshwater' : isOfficial(date) ? 'Official QLD tides' : p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
       <p class="small">${escapeHtml(sourceStatus(p))}. A <b>relative planning score</b>, not a catch probability or guaranteed result.</p>
-      ${withSave ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button><button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button></div>` : ''}
+      ${withSave ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button>` : ''}</div>` : ''}
     </article>`;
   }
   function windowCards(p) {
@@ -90,19 +156,24 @@
     return [...p.tides].sort((a,b)=>a.time-b.time).map(e => `<div class="tide-row"><span class="tide-type">${eventName(e.type)}</span><span>${timeText(e.time)}</span><span class="tide-h">${e.height === null || !Number.isFinite(Number(e.height)) ? '—' : `${Number(e.height).toFixed(2)} m`}</span></div>`).join('');
   }
   function tideCard(p) {
+    if (isFreshwater()) return `<section class="card"><div class="row"><h2 style="margin:0">Lake Proserpine · freshwater</h2><span class="score-badge">No coastal tides</span></div>
+      <p class="small">Peter Faust Dam is a freshwater reservoir. Ocean high and low tide times are <b>not used</b> for lake fishing predictions.</p>
+      <p class="hint">Barramundi and sooty grunter are stocked. A Stocked Impoundment Permit is required for anglers aged 18 or older.</p>
+      <p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Queensland Government · Peter Faust Dam rules ↗</a></p></section>`;
     const s = STATIONS[loc().station];
-    return `<section class="card"><div class="row"><h2 style="margin:0">Tides · ${s.name}</h2><span class="score-badge">${p.hasTides ? 'Imported' : 'Not loaded'}</span></div>
-      ${p.tides.length ? `<div class="section-split">${tideRows(p)}</div>` : `<p class="small">No tide times have been entered for this date. Fishing scores currently use only astronomical conditions.</p>`}
-      ${stationHint()}
-      <div class="actions"><button class="btn secondary" data-action="show-date-tides" data-date="${p.key}">${p.tides.length ? 'Manage tide data' : 'Add real tide data'}</button></div>
+    const status = p.hasTides ? isOfficial(p.key) ? 'Official forecast' : 'Previously imported' : 'Not available';
+    return `<section class="card"><div class="row"><h2 style="margin:0">Tides · ${s.name}</h2><span class="score-badge">${status}</span></div>
+      ${p.tides.length ? `<div class="section-split">${tideRows(p)}</div>` : `<p class="small">Official QLD high/low tide predictions have not been loaded for this date. This score uses sun/moon only.</p>`}
+      <p class="hint">${escapeHtml(tideStatus(p.key.slice(0,4)))}</p>${stationHint()}
+      <div class="actions"><button class="btn secondary" data-action="show-date-tides" data-date="${p.key}">View tide forecast</button></div>
     </section>`;
   }
   function renderToday() {
     const date = todayKey(), p = predict(date);
-    return `<p class="eyebrow">Your local fishing outlook</p><h1>Find your next great fishing window.</h1><p class="lead">Calculated for the Whitsundays, in Queensland time (AEST).</p>
+    return `<p class="eyebrow">Your local fishing outlook</p><h1>Find your next great fishing window.</h1><p class="lead">Calculated for the Whitsundays, in Queensland time (AEST). Coastal tide forecasts sync automatically from Queensland Government data.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
       ${scoreCard(p,date)}
-      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Windows favour moon transit/rise/set, sunrise/sunset and, where imported, tidal movement.</p></section>
+      <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Windows favour moon transit/rise/set and sunrise/sunset. Coastal sessions also consider tidal movement when official data is loaded. Freshwater locations never use ocean tides.</p></section>
       ${eventsCard(p)}${tideCard(p)}
       <div class="notice warning">Fishing activity is influenced by weather, habitat, water clarity and local conditions, not just tides or the moon. Check official forecasts and fishing regulations before leaving.</div>`;
   }
@@ -122,9 +193,9 @@
     const calendar = `<div class="cal-grid">${['M','T','W','T','F','S','S'].map(d=>`<div class="cal-week">${d}</div>`).join('')}${'<div class="cal-day empty"></div>'.repeat(blank)}${forecasts.map(d=>`<button class="cal-day ${d.date===todayKey()?'today-day':''} ${d.date===state.selected?'selected':''}" data-action="select-date" data-date="${d.date}" aria-label="${escapeHtml(fullDate(d.date))}, ${d.stars} stars"><span>${Number(d.date.slice(-2))}</span><span class="cal-rating">${d.stars}★${d.hasTides ? ' ≋' : ''}</span></button>`).join('')}</div>`;
     const top = [...forecasts].sort((a,b)=>b.score-a.score || a.date.localeCompare(b.date)).slice(0,5);
     return `<p class="eyebrow">Plan ahead</p><h1>Fishing calendar</h1><p class="lead">Compare estimated fishing windows by day and save your trips.</p><div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><div class="calendar-header"><button class="chevron" data-action="prev-month" aria-label="Previous month">‹</button><strong>${label}</strong><button class="chevron" data-action="next-month" aria-label="Next month">›</button></div>${calendar}<p class="hint">★ Relative score · ≋ User-imported tide data · Other dates use sun/moon only</p></section>
-      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${windowCards(selected)}<div class="actions"><button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button><button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button></div></section>
-      <section class="card"><h2>Top 5 dates this month</h2><div class="best-days">${top.map(d=>`<button class="best-day" data-action="select-date" data-date="${d.date}"><span>${shortDate(d.date)}${d.hasTides ? ' · tides loaded':''}</span><span class="star-small">${starText(d.stars)} · ${d.score}</span></button>`).join('')}</div></section>`;
+      <section class="card"><div class="calendar-header"><button class="chevron" data-action="prev-month" aria-label="Previous month">‹</button><strong>${label}</strong><button class="chevron" data-action="next-month" aria-label="Next month">›</button></div>${calendar}<p class="hint">★ Relative score · ≋ Tide-informed (official or legacy import). Dates without tide files use sun/moon only. Freshwater ignores tides.</p></section>
+      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${windowCards(selected)}<div class="actions"><button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button>` : ''}</div></section>
+      <section class="card"><h2>Top 5 dates this month</h2><div class="best-days">${top.map(d=>`<button class="best-day" data-action="select-date" data-date="${d.date}"><span>${shortDate(d.date)}${d.hasTides ? ' · tides available':''}</span><span class="star-small">${starText(d.stars)} · ${d.score}</span></button>`).join('')}</div></section>`;
   }
   function renderTrips() {
     const trips = [...state.trips].filter(t => typeof t.date === 'string' && LOCATIONS.some(l=>l.id===t.locId)).sort((a,b)=>a.date.localeCompare(b.date));
@@ -136,33 +207,37 @@
       <p class="hint">Saved trips are stored only in this browser. They do not automatically sync across devices.</p>`;
   }
   function renderTides() {
+    if (isFreshwater()) return `<p class="eyebrow">Freshwater mode</p><h1>Lake Proserpine</h1><p class="lead">Peter Faust Dam does not experience coastal tidal cycles.</p>
+      <div class="card soft">${locationPicker()}</div>${flash()}
+      <section class="card"><h2>Why there is no tide chart</h2><p>Lake Proserpine is a freshwater impoundment. This app calculates the sun and moon windows for the lake without adding coastal tides to its five-star rating.</p><p>For barramundi, consider water temperature, wind direction, seasonal changes and local structure alongside these astronomical windows.</p><p>A Queensland Stocked Impoundment Permit is required for line fishing by anglers aged 18 and over.</p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Official Peter Faust Dam fishing information ↗</a></section>`;
     const p = predict(state.selected);
     const station = STATIONS[loc().station];
-    const existing = p.tides.length ? tideRows(p) : '<p class="small">No tide events saved for this date.</p>';
-    return `<p class="eyebrow">Official data & manual entry</p><h1>Tide planner</h1><p class="lead">Bring real high/low tide predictions into the app. No invented tide times.</p>
+    return `<p class="eyebrow">Automatic official predictions</p><h1>Tide planner</h1><p class="lead">High and low tides from Queensland Government data, synced through the official Web API with a verified CSV fallback. No manual entry needed.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
-      <section class="card"><h2>${station.name} tide station</h2><label for="tide-date">Date</label><input type="date" id="tide-date" value="${state.selected}"><p class="hint">${nTideDays()} dates loaded for this station. The selected location may not be the actual tide-gauge site.</p>${stationHint()}<div class="divider"></div>${existing}</section>
-      <section class="card"><h2>Import Queensland tide CSV</h2><p class="small">Download the <b>predicted high/low CSV</b> for ${station.name} from Queensland Open Data, then choose that downloaded CSV below. The imported dates can be used throughout your calendar.</p>
-        <p><a href="${station.link}" target="_blank" rel="noopener noreferrer">Open official ${station.name} tide dataset ↗</a></p>
-        <label for="tide-file">Choose downloaded high/low CSV</label><input type="file" id="tide-file" accept=".csv,text/csv"><div class="actions"><button class="btn" data-action="import-file">Import tide predictions</button></div>
-        <p class="hint">Expected columns: Date, Time, Ind (H/L), Reading. Select the correct station yourself; the app cannot independently authenticate an uploaded file. Times are assumed to be Queensland AEST (UTC+10).</p>
+      <section class="card"><div class="row"><h2>${station.name} tide station</h2><span class="score-badge">${isOfficial(state.selected) ? 'Official QLD' : p.hasTides ? 'Legacy import' : 'Solunar only'}</span></div>
+        <label for="tide-date">Date</label><input type="date" id="tide-date" value="${state.selected}">
+        <div class="notice">${escapeHtml(tideStatus(state.selected.slice(0,4)))}</div>
+        ${isOfficial(state.selected) ? `<p class="hint">Data channel: <b>${escapeHtml(state.manifest?.stations?.[loc().station]?.years?.[state.selected.slice(0,4)]?.source_method || 'Official Queensland dataset')}</b></p>` : ''}
+        <p class="hint">${nTideDays()} dates currently loaded for this station. Times are predicted, not live measurements. All times use AEST (UTC+10).</p>${stationHint()}
+        <div class="divider"></div>${p.tides.length ? tideRows(p) : '<p class="small">No verified high/low predictions for this date. The app will show solunar-only scores until the official data is available.</p>'}
+        <div class="actions"><button class="btn secondary" data-action="retry-tides">Check for updated tide files</button></div>
       </section>
-      <section class="card"><h2>Or add tides for one date</h2><p class="small">Enter at least two events, one per line. Example:</p>
-        <p class="tiny muted">06:20 H 2.50<br>12:35 L 0.65<br>18:45 H 2.10</p>
-        <label for="manual-tides">Tide entries for ${state.selected}</label><textarea id="manual-tides" placeholder="06:20 H 2.50&#10;12:35 L 0.65"></textarea><div class="actions"><button class="btn" data-action="save-manual">Save this date</button><button class="btn danger" data-action="remove-tides-date">Clear this date</button></div>
-      </section><p class="hint">For boating safety, use current official tide tables and marine forecasts. Imported predictions are not live tide measurements.</p>`;
+      <section class="card"><h2>Official source & updates</h2><p class="small">The GitHub Actions job queries the Queensland Government <b>CKAN DataStore Web API</b>, validates the complete annual predicted high/low dataset and uses the official CSV as a fallback if the API is unavailable or incomplete. It checks weekly. These are BOM predictions republished by Maritime Safety Queensland; they are not real-time measurements.</p>
+        <p><a href="${station.link}" target="_blank" rel="noopener noreferrer">View QLD Government ${station.name} dataset ↗</a></p>
+        <p class="hint">If data isn't available, check the GitHub Actions “Sync official Queensland tide predictions” run. The government may not have published the desired year’s resource, or API/download access may be temporarily blocked. In either case, the app will not invent tide times.</p>
+      </section><p class="hint">Not for navigation. Verify marine conditions and official predictions before boating.</p>`;
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What works in this version</h2><p>Today’s 3 best 2-hour fishing windows, solunar events, sun times, moon phase, star-rated monthly calendar, saved sessions, location choices, and import/manual entry of actual tide predictions.</p>
-      <p>All astronomical calculations run in your browser. You can use previously loaded app screens offline. Your saved sessions and imported tides are stored locally.</p></section>
-      <section class="card"><h2>The 1–5 star rating</h2><p>We calculate an illustrative <b>relative opportunity score</b> from moon overhead/underfoot, moonrise/moonset, sunrise/sunset and moon illumination. When tide events have been imported for the selected day, proximity to high/low tide and the movement between adjacent highs/lows also contribute.</p>
+      <section class="card"><h2>What's new · v3.1</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Lake Proserpine (Peter Faust Dam) has been added as a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts also consider high/low and between-tide movement when official data is available.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
-        <p class="hint">This is a heuristic, not a scientifically validated catch-probability model. Scores without loaded tide data are clearly labelled “Solunar only”.</p></section>
-      <section class="card"><h2>Data and limitations</h2><p>Astronomical calculations are approximate and based on SunCalc-style solar and lunar position equations. Local events use <b>Australia/Brisbane (AEST, UTC+10)</b>. Tide events are not automatically sourced and must be imported or entered. Nearby tide stations do not capture all local variations.</p>
-        <p>Queensland high/low tide predictions: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">Maritime Safety Queensland</a>. Data files published by Queensland Government are typically available under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>; review the individual source’s conditions. Astronomy based on <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc</a> (BSD 2-Clause License).</p>
-        <div class="notice warning">Not for navigation or marine safety. Check official tide times, weather, marine warnings, boating requirements and fishing regulations before fishing.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open your deployed website in <b>Safari</b>, tap the Share icon, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 2.1 · Local-first fishing planner</p></section>`;
+        <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
+      <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour is used as a reference for Airlie Beach, Cannonvale and the Proserpine River mouth without applying local corrections. Bowen uses Bowen data.</p>
+        <p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
+        <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.1 · Official QLD tide Web API + CSV fallback</p></section>`;
   }
   function render() {
     try {
@@ -180,7 +255,7 @@
   function switchTab(tab) {
     if (!['today','calendar','trips','tides','about'].includes(tab)) return;
     state.tab = tab;
-    render();
+    refresh();
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
   function saveTrip(key) {
@@ -202,29 +277,7 @@
     const d = new Date(Date.UTC(y,m-1+delta,1));
     state.month = d.toISOString().slice(0,7);
     state.selected = state.month + '-01';
-    render();
-  }
-  async function importFile() {
-    const input = document.getElementById('tide-file');
-    const file = input?.files?.[0];
-    if (!file) { state.flash = 'Choose a downloaded tide CSV file first.'; render(); return; }
-    const stationId = loc().station;
-    try {
-      const result = Tides.parseCsv(await file.text());
-      state.tides[stationId] = Tides.merge(state.tides[stationId] || {}, result.byDate);
-      saveState();
-      state.flash = `Imported ${result.accepted} tide events across ${result.days} dates for ${STATIONS[stationId].name}. ${result.ignored} lines skipped.`;
-    } catch (error) { state.flash = `Import failed: ${error.message}`; }
-    render();
-  }
-  function saveManual() {
-    try {
-      const rows = Tides.parseManual(state.selected, document.getElementById('manual-tides').value);
-      state.tides[loc().station] = Tides.merge(tideMap(), rows);
-      saveState();
-      state.flash = `Saved ${rows[state.selected].length} high/low events for ${shortDate(state.selected)}.`;
-    } catch (error) { state.flash = error.message; }
-    render();
+    refresh();
   }
   document.addEventListener('click', event => {
     const nav = event.target.closest('[data-tab]');
@@ -235,32 +288,24 @@
     switch (target.dataset.action) {
       case 'open-calendar': switchTab('calendar'); break;
       case 'show-date-tides': state.selected=date;state.month=date.slice(0,7);switchTab('tides');break;
-      case 'select-date': state.selected=date;state.month=date.slice(0,7);render();break;
+      case 'select-date': state.selected=date;state.month=date.slice(0,7);refresh();break;
       case 'prev-month': moveMonth(-1); break;
       case 'next-month': moveMonth(1); break;
       case 'save-trip': saveTrip(date); break;
       case 'remove-trip': state.trips=state.trips.filter(t => t.id !== target.dataset.id);saveState();render();break;
-      case 'import-file': importFile();break;
-      case 'save-manual': saveManual();break;
-      case 'remove-tides-date': {
-        if (!tideMap()[state.selected]) { state.flash='No tide entries to clear for this date.';render();break; }
-        if (window.confirm(`Clear tide predictions for ${fullDate(state.selected)}?`)) {
-          delete tideMap()[state.selected];saveState();state.flash='Tide events cleared for this date.';render();
-        }
-        break;
-      }
+      case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); refresh(); break; }
     }
   });
   document.addEventListener('change', event => {
     if (event.target.id === 'location-select' && LOCATIONS.some(l=>l.id===event.target.value)) {
-      state.locId=event.target.value;saveState();render();
+      state.locId=event.target.value;saveState();refresh();
     }
     if (event.target.id === 'tide-date') {
       const date = Tides.parseDate(event.target.value);
-      if (date) { state.selected=date;state.month=date.slice(0,7);render(); }
+      if (date) { state.selected=date;state.month=date.slice(0,7);refresh(); }
     }
   });
-  render();
+  refresh();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('./sw.js').catch(error=>console.warn('Offline service worker unavailable:',error));
   }
