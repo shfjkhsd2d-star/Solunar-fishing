@@ -103,3 +103,17 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .tide-score-option:not(.selected):hover{background:#1d4b5d;color:#fff}
 .tide-score-explain{margin:8px 0 0;font-size:11px;line-height:1.4;color:#a6c6ce}
 @media(max-width:360px){.weather-hour-list{max-height:213px}.tide-score-control{padding:10px}.tide-score-option{padding:8px}}
+
+/* v3.12 — compact Today's marine swell and calendar daily weather. */
+.swell-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0 4px;border:1px solid #37657a;background:#10364a;border-radius:13px;padding:12px}
+.swell-strip>div{min-width:0;display:flex;flex-direction:column;gap:5px}
+.swell-strip strong{font-size:21px;color:#f0fbfa;line-height:1.2}
+.swell-strip small{font-size:11px;color:#b7d9e5;line-height:1.5}
+.swell-strip>.small{font-size:12px;line-height:1.5}
+.weather-day-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:13px}
+.weather-day-metric{background:#0a2c3d;border:1px solid #3a697a;border-radius:12px;padding:13px 11px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.weather-day-metric>span{font-size:11px;color:#b1d4df}
+.weather-day-metric>strong{font-size:21px;color:#f7ffff;line-height:1.2;overflow-wrap:anywhere}
+.weather-day-metric>small{font-size:11px;line-height:1.5;color:#b0d1d9}
+.calendar-weather .wind-unit-row{margin:10px 0}
+@media(max-width:370px){.weather-day-grid{gap:7px}.weather-day-metric{padding:10px 8px}.weather-day-metric>strong{font-size:17px}.swell-strip{gap:7px;padding:10px}.swell-strip strong{font-size:18px}}
