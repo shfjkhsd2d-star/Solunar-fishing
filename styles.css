@@ -117,3 +117,18 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .weather-day-metric>small{font-size:11px;line-height:1.5;color:#b0d1d9}
 .calendar-weather .wind-unit-row{margin:10px 0}
 @media(max-width:370px){.weather-day-grid{gap:7px}.weather-day-metric{padding:10px 8px}.weather-day-metric>strong{font-size:17px}.swell-strip{gap:7px;padding:10px}.swell-strip strong{font-size:18px}}
+
+/* v3.13 — compact model grid transparency and reef tide references. */
+.forecast-grid-details{margin:12px 0 8px;border:1px solid #397184;border-radius:12px;background:#092c3d;padding:9px 12px}
+.forecast-grid-details>summary{cursor:pointer;color:#cff1ef;font-size:12px;font-weight:750;line-height:1.6;display:list-item;list-style-position:inside}
+.forecast-grid-details>summary small{font-size:10px;color:#adcdd6;display:block;margin-left:19px;font-weight:500;overflow-wrap:anywhere}
+.forecast-grid-details[open]{padding-bottom:12px}
+.grid-source-rows{margin:10px 0 8px;border-top:1px solid #326072}
+.grid-source-row{padding:10px 0;border-bottom:1px solid #285263;display:flex;gap:8px;justify-content:space-between;align-items:flex-start;font-size:11px}
+.grid-source-row>span:last-child{text-align:right;overflow-wrap:anywhere}
+.grid-source-row b{color:#e2fbfa;font-size:11px}
+.grid-source-row small{display:block;color:#a4c6d0;font-size:10px;line-height:1.6}
+.forecast-grid-details .notice{margin:12px 0 0;font-size:11px}
+.reef-reference-links{display:flex;flex-direction:column;gap:9px;margin:12px 0}
+.reef-reference-links a{overflow-wrap:anywhere;font-size:12px}
+@media(max-width:360px){.forecast-grid-details{padding:8px}.grid-source-row{font-size:10px}.grid-source-row b{font-size:10px}}

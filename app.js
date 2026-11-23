@@ -219,7 +219,9 @@
     state.weatherLoading.add(id);
     state.weatherErrors[id] = '';
     render();
-    fetch(Weather.buildUrl(current.lat, current.lon), {cache:'no-store'})
+    fetch(Weather.buildUrl(current.lat, current.lon, {
+      cellSelection: current.water === 'offshore' ? 'sea' : undefined
+    }), {cache:'no-store'})
       .then(response => {
         if (!response.ok) throw new Error(`Forecast server returned HTTP ${response.status}`);
         return response.json();
@@ -228,7 +230,7 @@
         // Forecast date is today's date in AEST, not the browser's local time zone.
         const days = Weather.parseDays(json);
         const data = days[todayKey()] || null;
-        state.weatherByLoc[id] = { data, days, loadedAt: Date.now() };
+        state.weatherByLoc[id] = { data, days, grid: typeof Weather.gridInfo === 'function' ? Weather.gridInfo(json) : null, loadedAt: Date.now() };
         state.weatherErrors[id] = '';
       })
       .catch(error => {
@@ -248,9 +250,53 @@
     state.marineErrors[id]='';
     fetch(Marine.buildUrl(current.lat,current.lon), {cache:'no-store'})
       .then(response=>{ if (!response.ok) throw new Error(`Marine forecast HTTP ${response.status}`); return response.json(); })
-      .then(json=>{ state.marineByLoc[id]={days:Marine.parseDays(json),loadedAt:Date.now()};state.marineErrors[id]=''; })
+      .then(json=>{ state.marineByLoc[id]={days:Marine.parseDays(json),grid:typeof Marine.gridInfo === 'function' ? Marine.gridInfo(json) : null,loadedAt:Date.now()};state.marineErrors[id]=''; })
       .catch(error=>{state.marineErrors[id]=error?.message||'Marine model not available';})
       .finally(()=>{state.marineLoading.delete(id);if (['today','calendar'].includes(state.tab) && loc().id===id) render();});
+  }
+  // Model responses expose the center of the grid cell they actually used.
+  // Use WGS84 haversine distance (great-circle kilometres), not browser position.
+  function distanceKm(a, b) {
+    if (!a || !b || ![a.lat,a.lon,b.lat,b.lon].every(Number.isFinite)) return null;
+    const rad = Math.PI / 180;
+    const dLat = (b.lat-a.lat)*rad, dLon = (b.lon-a.lon)*rad;
+    const h = Math.sin(dLat/2)**2 + Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLon/2)**2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(h),Math.sqrt(Math.max(0,1-h)));
+  }
+  function gridCoords(grid) {
+    return `${Math.abs(grid.lat).toFixed(4)}° ${grid.lat < 0 ? 'S' : 'N'}, ${Math.abs(grid.lon).toFixed(4)}° ${grid.lon < 0 ? 'W' : 'E'}`;
+  }
+  function forecastGridDetails() {
+    const selected = loc();
+    const origin = { lat:selected.lat, lon:selected.lon };
+    const wind = state.weatherByLoc[selected.id]?.grid || null;
+    const swell = isFreshwater() ? null : state.marineByLoc[selected.id]?.grid || null;
+    const data = [{name:'Wind',grid:wind, expected:true,kind:selected.water === 'offshore' ? 'Sea-grid preferred' : 'Best-match model'}];
+    if (!isFreshwater()) data.push({name:'Swell / waves',grid:swell,expected:true,kind:'Marine sea grid'});
+    const rows = data.map(d => {
+      const km = distanceKm(origin,d.grid);
+      return `<div class="grid-source-row"><span><b>${escapeHtml(d.name)}</b><small>${escapeHtml(d.kind)}</small></span>
+        <span>${d.grid ? `${escapeHtml(gridCoords(d.grid))}<small>${km.toFixed(1)} km from selected location</small>` : '<small>Model grid not yet available</small>'}</span></div>`;
+    }).join('');
+    const far = data.filter(d=>distanceKm(origin,d.grid)>30);
+    const missing = data.some(d=>!d.grid);
+    const headline = data.filter(d=>d.grid).map(d=>`${d.name} ${distanceKm(origin,d.grid).toFixed(1)} km`).join(' · ');
+    const warn = far.length ? `<p class="notice warning">The ${escapeHtml(far.map(d=>d.name).join(' and '))} forecast grid is more than 30 km from ${escapeHtml(selected.name)}. Treat these values as a regional outlook, not local reef conditions.</p>` :
+      missing ? '<p class="hint">Grid coordinates will appear once the forecast is loaded. A missing grid cannot be checked for proximity.</p>' :
+      '<p class="hint">Grid distance is not a forecast accuracy guarantee, especially near reef and island shelter.</p>';
+    return `<details class="forecast-grid-details" aria-label="Forecast model grid locations">
+      <summary><span>Model grid locations</span><small>${escapeHtml(headline || 'Awaiting forecast coordinates')} · tap to inspect</small></summary>
+      <div class="grid-source-rows"><div class="grid-source-row"><span><b>${escapeHtml(selected.name)} reference</b></span><span>${escapeHtml(gridCoords(origin))}</span></div>${rows}</div>
+      ${warn}<p class="hint">Coordinates are the actual model grid-cell centres returned by Open-Meteo, <b>not</b> wind stations or wave buoys. Forecasts are model estimates; always consult official BOM marine warnings.</p>
+    </details>`;
+  }
+  function hardyTideReferenceCard() {
+    return `<section class="card"><div class="row wrap"><h2>Hardy Reef · tidal information</h2><span class="score-badge">Local feed not verified</span></div>
+      <p>Maritime Safety Queensland's Whitsundays port guidance describes a maximum tidal rise and fall of about <b>4.2 metres</b> at Hardy Reef, with potentially strong currents in reef gaps. This is <b>site guidance, not today's tide times or a current-speed forecast.</b></p>
+      <p class="small">The app does not have a verified, licensed, automatically updated Hardy Reef tide feed. Shute Harbour and Bowen water levels must not be treated as reef predictions. Hardy Reef's five-star figure therefore stays <b>solunar-only</b>.</p>
+      <div class="reef-reference-links"><a href="https://www.msq.qld.gov.au/tides/tide-tables" target="_blank" rel="noopener noreferrer">Official QLD tide tables ↗</a><a href="https://www.bom.gov.au/australia/tides/" target="_blank" rel="noopener noreferrer">BOM Central Coast &amp; Reefs tides ↗</a><a href="https://tides.willyweather.com.au/qld/mackay/hardy-reef.html" target="_blank" rel="noopener noreferrer">Hardy Reef tide times (third-party; not verified here) ↗</a></div>
+      <p class="hint">The third-party listing is a comparison resource only: its data licence, datum and API access have not been validated for integration. Do not use it or this app for navigation. Check marine zoning and local conditions.</p>
+    </section>`;
   }
   const fmtHeight = h => h == null ? '—' : `${h.toFixed(1)} m`;
   const fmtPeriod = p => p == null ? '—' : `${p.toFixed(1)} s`;
@@ -282,6 +328,7 @@
       ${windUnitControl()}
       <div class="weather-day-grid"><div class="weather-day-metric"><span>Wind · daily average</span><strong>${w ? windReading(w.avgWind) : '—'}</strong><small>${w ? `From ${escapeHtml(w.compass)} · peak gust ${windReading(w.maxGust)}` : windMsg}</small></div>
       <div class="weather-day-metric"><span>Swell · daily maximum</span><strong>${isFreshwater() ? 'N/A' : m ? fmtHeight(m.maxSwell) : '—'}</strong><small>${isFreshwater() ? 'Freshwater lake: no ocean swell' : m ? `From ${escapeHtml(m.compass)} · ${fmtPeriod(m.period)} mean period${m.maxWave!=null ? ` · total waves up to ${fmtHeight(m.maxWave)}` : ''}` : swellMsg}</small></div></div>
+      ${forecastGridDetails()}
       <p class="hint">These are model forecasts, not live observations. Forecasts beyond provider availability are not estimated or invented. Weather does not change the five-star score. <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">Official BOM marine warnings ↗</a> · <a href="https://open-meteo.com/en/docs/marine-weather-api" target="_blank" rel="noopener noreferrer">Marine model source ↗</a></p>
     </section>`;
   }
@@ -309,7 +356,7 @@
     if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2>${windUnitControl()}<p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${source}</section>`;
     if (!isCurrent) return `<section class="card weather-card"><div class="row"><h2>🌬️ Today's wind & weather</h2><span class="score-badge">Forecast</span></div>
       ${windUnitControl()}<p class="small">${state.weatherLoading.has(id) ? 'Loading hourly wind forecast…' : error ? `Weather temporarily unavailable: ${escapeHtml(error)}` : 'Waiting for the latest weather forecast…'}</p>
-      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${swellToday()}${source}</section>`;
+      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${swellToday()}${forecastGridDetails()}${source}</section>`;
     const data = entry.data;
     const hour = AEST_HOUR();
     const now = Weather.nearestHour(data, hour);
@@ -331,6 +378,7 @@
         <div class="weather-now-side"><div>${now.temp == null ? '—' : Math.round(now.temp) + '°C'}</div><div>${escapeHtml(Weather.condition(now.code))}</div><div>Rain ${now.rain == null ? '—' : Math.round(now.rain) + '%'}</div></div>
       </div>
       ${swellToday()}
+      ${forecastGridDetails()}
       <div class="weather-hours-header"><strong>Hour-by-hour wind</strong><span>Speed · direction · gusts</span></div>
       <div class="weather-hour-list" data-hourly-scroll data-location="${escapeHtml(id)}" tabindex="0" role="region" aria-label="Scrollable hourly wind speed, direction and gust forecast">${rows.map(renderRow).join('')}</div>
       <div class="weather-scroll-note">↕ Scroll for the full 24-hour forecast · current hour highlighted</div>
@@ -394,7 +442,7 @@
     return [...p.tides].sort((a,b)=>a.time-b.time).map(e => `<div class="tide-row"><span class="tide-type">${eventName(e.type)}</span><span>${timeText(e.time)}</span><span class="tide-h">${e.height === null || !Number.isFinite(Number(e.height)) ? '—' : `${Number(e.height).toFixed(2)} m`}</span></div>`).join('');
   }
   function tideCard(p) {
-    if (isOffshore()) return `<section class="card"><h2>Hardy Reef · offshore reference</h2><p>No verified local Queensland tide station is configured for Hardy Reef. The score uses sun and moon only. Shute Harbour water-height data must not be treated as an offshore reef tide prediction.</p>${hardyZoneNotice()}</section>`;
+    if (isOffshore()) return hardyTideReferenceCard();
     if (isFreshwater()) return `<section class="card"><div class="row"><h2 style="margin:0">Proserpine Dam · freshwater</h2><span class="score-badge">No coastal tides</span></div>
       <p class="small">Peter Faust Dam is a freshwater reservoir. Ocean high and low tide times are <b>not used</b> for lake fishing predictions.</p>
       <p class="hint">Barramundi and sooty grunter are stocked. A Stocked Impoundment Permit is required for anglers aged 18 or older.</p>
@@ -475,7 +523,7 @@
       <p class="hint">Saved trips are stored only in this browser. They do not automatically sync across devices.</p>`;
   }
   function renderTides() {
-    if (isOffshore()) return `<p class="eyebrow">Offshore reference</p><h1>Hardy Reef</h1><div class="card soft">${locationPicker()}</div>${hardyZoneNotice()}<section class="card"><h2>No local verified tide feed</h2><p>Hardy Reef is not covered by the two Queensland Government tide stations configured here. This app deliberately does not substitute Shute Harbour heights or 10-minute tidal movement for offshore reef conditions.</p><p>Use official tide information, marine forecasts and marine park zoning maps when planning any permitted activity in surrounding waters.</p></section>`;
+    if (isOffshore()) return `<p class="eyebrow">Offshore conditions reference</p><h1>Hardy Reef tides</h1><div class="card soft">${locationPicker()}</div>${hardyZoneNotice()}${hardyTideReferenceCard()}`;
     if (isFreshwater()) return `<p class="eyebrow">Freshwater mode</p><h1>Proserpine Dam</h1><p class="lead">Peter Faust Dam does not experience coastal tidal cycles.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
       <section class="card"><h2>Why there is no tide chart</h2><p>Proserpine Dam (Lake Proserpine / Peter Faust Dam) is a freshwater impoundment. This app calculates the sun and moon windows for the lake without adding coastal tides to its five-star rating.</p><p>For barramundi, consider water temperature, wind direction, seasonal changes and local structure alongside these astronomical windows.</p><p>A Queensland Stocked Impoundment Permit is required for line fishing by anglers aged 18 and over.</p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Official Peter Faust Dam fishing information ↗</a></section>`;
@@ -500,8 +548,8 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.12</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
-      <p>Choose whether coastal fishing scores use verified 10-minute water-height changes or predicted high/low tide times. The selection is saved on your device. The 10-minute method falls back to high/low when its data is missing. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The compact Today weather panel contains a scrollable 24-hour wind forecast with wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Hardy Reef is an offshore conditions reference within a Green/no-take protected area; fishing is prohibited there. Swell model predictions and calendar wind forecasts are provided for planning, with limited forecast horizons. Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>What's new · v3.13</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Choose whether coastal fishing scores use verified 10-minute water-height changes or predicted high/low tide times. The selection is saved on your device. The 10-minute method falls back to high/low when its data is missing. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The compact Today weather panel contains a scrollable 24-hour wind forecast with wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Hardy Reef is an offshore conditions reference within a Green/no-take protected area; fishing is prohibited there. Its wind forecasts now prefer sea grid cells. Weather and swell displays show the actual forecast model-grid coordinates and distance to the selected location. An offshore tide reference card links to official guidance and independent Hardy Reef tide information, but no unverified external tides are used in fishing scores. Swell model predictions and calendar wind forecasts are provided for planning, with limited forecast horizons. Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
       <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts use verified 10-minute water-height changes when available; otherwise they retain high/low timing and midpoint estimates.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>

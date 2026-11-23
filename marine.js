@@ -19,6 +19,12 @@
     return ENDPOINT + '?' + q.toString();
   }
   const valid = (v,min,max) => typeof v === 'number' && Number.isFinite(v) && v>=min && v<=max ? v : null;
+  function gridInfo(payload) {
+    const lat = payload?.latitude, lon = payload?.longitude;
+    return typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90 &&
+      typeof lon === 'number' && Number.isFinite(lon) && Math.abs(lon) <= 180
+      ? { lat, lon } : null;
+  }
   function parseDays(json) {
     if (!json || json.error || json.timezone !== 'Australia/Brisbane') throw new Error('Invalid Queensland marine forecast response');
     const h = json.hourly;
@@ -66,5 +72,5 @@
   function nearestHour(day, hour) {
     return day?.hours?.reduce((best,r)=>!best || Math.abs(r.hour-hour)<Math.abs(best.hour-hour)?r:best,null) || null;
   }
-  return {buildUrl,parseDays,summary,nearestHour,compass};
+  return {buildUrl,parseDays,summary,nearestHour,compass,gridInfo};
 });
