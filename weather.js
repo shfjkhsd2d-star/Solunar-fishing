@@ -16,7 +16,7 @@
     if (!Number.isFinite(deg)) return '—';
     return compassPoints[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
   }
-  function buildUrl(latitude, longitude) {
+  function buildUrl(latitude, longitude, options = {}) {
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
       throw new Error('Invalid fishing-location coordinates');
     }
@@ -25,7 +25,16 @@
       'hourly=' + VARS.join(','), 'timezone=Australia%2FBrisbane', 'forecast_days=16',
       'wind_speed_unit=kmh', 'models=best_match'
     ];
+    // Offshore wind forecasts should prefer a sea rather than a land grid cell.
+    // This is a preference, not an assurance of point-observation accuracy.
+    if (options.cellSelection === 'sea') args.push('cell_selection=sea');
     return ORIGIN + '?' + args.join('&');
+  }
+  function gridInfo(payload) {
+    const lat = payload?.latitude, lon = payload?.longitude;
+    return typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90 &&
+      typeof lon === 'number' && Number.isFinite(lon) && Math.abs(lon) <= 180
+      ? { lat, lon } : null;
   }
   function optionalNumber(v, min, max) {
     return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
@@ -97,5 +106,5 @@
     const direction = x===0 && y===0 ? null : (Math.atan2(y,x)*180/Math.PI+360)%360;
     return {avgWind:speed,maxGust:gusts.length?Math.max(...gusts):null,direction,compass:compass(direction),samples:hours.length};
   }
-  return { buildUrl, parseForecast, parseDays, summary, compass, nearestHour, condition };
+  return { buildUrl, parseForecast, parseDays, summary, compass, nearestHour, condition, gridInfo };
 });
