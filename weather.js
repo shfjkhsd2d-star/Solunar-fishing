@@ -22,7 +22,7 @@
     }
     const args = [
       'latitude=' + encodeURIComponent(latitude), 'longitude=' + encodeURIComponent(longitude),
-      'hourly=' + VARS.join(','), 'timezone=Australia%2FBrisbane', 'forecast_days=2',
+      'hourly=' + VARS.join(','), 'timezone=Australia%2FBrisbane', 'forecast_days=16',
       'wind_speed_unit=kmh', 'models=best_match'
     ];
     return ORIGIN + '?' + args.join('&');
@@ -77,5 +77,25 @@
     if (code >= 95) return 'Thunderstorm risk';
     return 'Forecast';
   }
-  return { buildUrl, parseForecast, compass, nearestHour, condition };
+  function parseDays(payload) {
+    if (!payload || !payload.hourly || !Array.isArray(payload.hourly.time)) throw new Error('Weather provider returned missing hourly forecasts');
+    const days = [...new Set(payload.hourly.time.filter(t=>typeof t==='string' && /^\d{4}-\d{2}-\d{2}T\d{2}:00$/.test(t)).map(t=>t.slice(0,10)))];
+    const result = {};
+    for (const date of days) {
+      try { result[date] = parseForecast(payload, date); } catch { /* Skip incomplete forecast dates. */ }
+    }
+    if (!Object.keys(result).length) throw new Error('No complete hourly wind forecasts available');
+    return result;
+  }
+  function summary(day) {
+    if (!day?.hours?.length) return null;
+    const hours=day.hours;
+    const speed=hours.reduce((total,h)=>total+h.speed,0)/hours.length;
+    const gusts=hours.map(h=>h.gust).filter(Number.isFinite);
+    let x=0,y=0;
+    for (const h of hours) { const rad=h.direction*Math.PI/180; const weight=Math.max(h.speed,0.1); x+=Math.cos(rad)*weight;y+=Math.sin(rad)*weight; }
+    const direction = x===0 && y===0 ? null : (Math.atan2(y,x)*180/Math.PI+360)%360;
+    return {avgWind:speed,maxGust:gusts.length?Math.max(...gusts):null,direction,compass:compass(direction),samples:hours.length};
+  }
+  return { buildUrl, parseForecast, parseDays, summary, compass, nearestHour, condition };
 });

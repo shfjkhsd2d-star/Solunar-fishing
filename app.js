@@ -4,17 +4,19 @@
   const Astro = window.SolunarAstro;
   const Tides = window.SolunarTides;
   const Weather = window.SolunarWeather;
+  const Marine = window.SolunarMarine;
   const app = document.getElementById('app');
   if (!app || !Astro || !Tides) {
     if (app) app.textContent = 'App files were not loaded. Please refresh the page.';
     return;
   }
-  // Only these three locations can be selected for new forecasts and trips.
+  // Four forecast locations: Hardy Reef is an offshore conditions reference, NOT a permitted fishing spot.
   // Keep existing IDs for saved settings and fishing trips from previous versions.
   const LOCATIONS = [
     { id: 'bowen', name: 'Bowen', lat: -20.013, lon: 148.245, station: 'bowen' },
     { id: 'lake-proserpine', name: 'Proserpine Dam', lat: -20.368, lon: 148.382, station: null, water: 'freshwater' },
-    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' }
+    { id: 'shute', name: 'Shute Harbour', lat: -20.286, lon: 148.785, station: 'shute' },
+    { id: 'hardy', name: 'Hardy Reef', lat: -19.75, lon: 149.233333, station: null, water: 'offshore' }
   ];
   // Historical trip labels remain visible, but these sites are no longer selectable.
   const RETIRED_LOCATION_NAMES = { airlie: 'Airlie Beach (previous location)', cannonvale: 'Cannonvale (previous location)', proserpine: 'Proserpine River Mouth (previous location)' };
@@ -48,6 +50,7 @@
     loadedYears: new Set(), loadingYears: new Set(), yearErrors: {},
     flash: '',
     weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {},
+    marineByLoc: {}, marineLoading: new Set(), marineErrors: {},
     windUnit: persistent.windUnit === 'kn' ? 'kn' : 'kmh',
     tideScoringMode: persistent.tideScoringMode === 'highlow' ? 'highlow' : 'interval'
   };
@@ -61,21 +64,24 @@
     }
   }
   const loc = () => LOCATIONS.find(l => l.id === state.locId) || LOCATIONS[0];
-  const isFreshwater = () => loc().station === null;
-  const tideMap = () => isFreshwater() ? {} : { ...(state.tides[loc().station] || {}), ...(state.official[loc().station] || {}) };
+  const isFreshwater = () => loc().water === 'freshwater';
+  const isOffshore = () => loc().water === 'offshore';
+  const hasTideStation = () => !!loc().station;
+  const tideMap = () => !hasTideStation() ? {} : { ...(state.tides[loc().station] || {}), ...(state.official[loc().station] || {}) };
   const isOfficial = key => !isFreshwater() && !!state.official[loc().station]?.[key];
-  const intervalMap = () => isFreshwater() ? {} : state.intervals[loc().station] || {};
-  const hasInterval = key => !isFreshwater() && Array.isArray(intervalMap()[key]);
+  const intervalMap = () => !hasTideStation() ? {} : state.intervals[loc().station] || {};
+  const hasInterval = key => hasTideStation() && Array.isArray(intervalMap()[key]);
   // Keep loading both datasets. The selected mode only controls which coastal tide component affects ratings.
   const predict = key => Astro.predictDay(key, loc().lat, loc().lon, tideMap(),
     state.tideScoringMode === 'highlow' ? {} : intervalMap());
   const nTideDays = () => Object.keys(tideMap()).length;
   const sourceStatus = p => isFreshwater() ? 'Freshwater · sun and moon only · no ocean tide influence' :
+    isOffshore() ? 'Offshore reef conditions reference · solunar-only score; no verified local tide station' :
     p.intervalUsed ? 'Sun + moon + verified QLD 10-minute predicted water-level movement' :
     !p.hasTides ? 'Sun + moon only; tide predictions unavailable for this date' :
       isOfficial(p.key) ? 'Sun + moon + QLD Government predicted high/low tides' : 'Sun + moon + previously imported tides';
   const tideStatus = year => {
-    if (isFreshwater()) return 'Not applicable to freshwater';
+    if (!hasTideStation()) return isFreshwater() ? 'Not applicable to freshwater' : 'No verified local Queensland tide station for Hardy Reef';
     const key = `${loc().station}-${year}`;
     if (state.loadingYears.has(key)) return 'Checking official tide predictions…';
     if (state.yearErrors[key]) return `Official data not loaded: ${state.yearErrors[key]}`;
@@ -180,7 +186,7 @@
     }
   }
   function intervalStatus(year) {
-    if (isFreshwater()) return 'Not applicable to freshwater';
+    if (!hasTideStation()) return isFreshwater() ? 'Not applicable to freshwater' : 'No verified local Queensland tide station for Hardy Reef';
     const k = `${loc().station}-${year}`;
     if (state.intervalLoaded.has(k)) return 'Verified 10-minute predictions active';
     if (state.intervalLoading.has(k)) return 'Checking official 10-minute predictions…';
@@ -188,7 +194,7 @@
     return 'Looking for 10-minute predictions…';
   }
   function syncVisibleTides() {
-    if (isFreshwater()) return;
+    if (!hasTideStation()) return;
     const year = state.tab === 'today' ? todayKey().slice(0,4) : state.selected.slice(0,4);
     void loadOfficial(loc().station, year);
     void loadIntervals(loc().station, year);
@@ -201,10 +207,10 @@
   }).format(new Date()));
   function localHourText(h) { return `${(h % 12) || 12} ${h < 12 ? 'am' : 'pm'}`; }
   function weatherCacheFresh(item) {
-    return !!item && item.data.day === todayKey() && Date.now() - item.loadedAt < 20 * 60 * 1000;
+    return !!item && !!item.days?.[todayKey()] && Date.now() - item.loadedAt < 20 * 60 * 1000;
   }
   function syncVisibleWeather(force = false) {
-    if (state.tab !== 'today' || !Weather) return;
+    if (!['today','calendar'].includes(state.tab) || !Weather) return;
     const current = loc();
     const id = current.id;
     if (state.weatherLoading.has(id)) return;
@@ -220,14 +226,64 @@
       })
       .then(json => {
         // Forecast date is today's date in AEST, not the browser's local time zone.
-        const data = Weather.parseForecast(json, todayKey());
-        state.weatherByLoc[id] = { data, loadedAt: Date.now() };
+        const days = Weather.parseDays(json);
+        const data = days[todayKey()] || null;
+        state.weatherByLoc[id] = { data, days, loadedAt: Date.now() };
         state.weatherErrors[id] = '';
       })
       .catch(error => {
         state.weatherErrors[id] = error?.message || 'Network connection unavailable';
       })
-      .finally(() => { state.weatherLoading.delete(id); if (state.tab === 'today' && loc().id === id) render(); });
+      .finally(() => { state.weatherLoading.delete(id); if (['today','calendar'].includes(state.tab) && loc().id === id) render(); });
+  }
+  // Separate marine forecast is deliberately optional: missing swell must never hide wind or tides.
+  function syncVisibleMarine(force = false) {
+    if (!['today','calendar'].includes(state.tab) || !Marine || isFreshwater()) return;
+    const current=loc(), id=current.id;
+    if (state.marineLoading.has(id)) return;
+    const cache=state.marineByLoc[id];
+    if (!force && cache && Date.now()-cache.loadedAt<30*60*1000) return;
+    if (!force && state.marineErrors[id]) return;
+    state.marineLoading.add(id);
+    state.marineErrors[id]='';
+    fetch(Marine.buildUrl(current.lat,current.lon), {cache:'no-store'})
+      .then(response=>{ if (!response.ok) throw new Error(`Marine forecast HTTP ${response.status}`); return response.json(); })
+      .then(json=>{ state.marineByLoc[id]={days:Marine.parseDays(json),loadedAt:Date.now()};state.marineErrors[id]=''; })
+      .catch(error=>{state.marineErrors[id]=error?.message||'Marine model not available';})
+      .finally(()=>{state.marineLoading.delete(id);if (['today','calendar'].includes(state.tab) && loc().id===id) render();});
+  }
+  const fmtHeight = h => h == null ? '—' : `${h.toFixed(1)} m`;
+  const fmtPeriod = p => p == null ? '—' : `${p.toFixed(1)} s`;
+  function hardyZoneNotice() {
+    if (!isOffshore()) return '';
+    return `<div class="notice warning" role="note"><b>Hardy Reef zoning alert:</b> Hardy Reef is within a Marine National Park (Green/no-take) area. Recreational fishing is prohibited in Green Zones. This offshore location is for weather and journey planning only. Verify where fishing is permitted using the <a href="https://www.gbrmpa.gov.au/access/zoning/eye-on-the-reef-app" target="_blank" rel="noopener noreferrer">Reef Authority's zoning resources ↗</a> before setting out.</div>`;
+  }
+  function swellToday() {
+    if (isFreshwater()) return `<p class="hint">Swell forecasts do not apply to freshwater Proserpine Dam.</p>`;
+    const id=loc().id, day=state.marineByLoc[id]?.days?.[todayKey()];
+    if (!day) {
+      const msg=state.marineErrors[id] ? `Swell unavailable: ${escapeHtml(state.marineErrors[id])}` : state.marineLoading.has(id) ? 'Loading offshore swell forecast…' : 'Swell forecast not available at this location.';
+      return `<div class="swell-strip"><strong>🌊 Swell</strong><span class="small">${msg}</span></div>`;
+    }
+    const current=Marine.nearestHour(day,AEST_HOUR()), total=Marine.summary(day);
+    return `<div class="swell-strip" aria-label="Predicted offshore swell">
+      <div><span class="weather-now-label">🌊 Swell · ${localHourText(current.hour)}</span><strong>${fmtHeight(current.height)}</strong><small>From ${escapeHtml(Marine.compass(current.direction))} · ${fmtPeriod(current.period)} period</small></div>
+      <div><span class="weather-now-label">Today's peak swell</span><strong>${fmtHeight(total.maxSwell)}</strong><small>${total.maxWave==null ? 'Total waves unavailable' : `Peak combined waves ${fmtHeight(total.maxWave)}`}</small></div>
+    </div><p class="hint">Swell and total wave height are different. Model estimates may be inaccurate in sheltered bays and near reefs.</p>`;
+  }
+  function calendarWeatherCard(date) {
+    if (date < todayKey()) return `<section class="card"><h2>Wind & swell · ${escapeHtml(shortDate(date))}</h2><p class="small">Past date: current weather forecasts aren't historical observations.</p></section>`;
+    const w=Weather?.summary(state.weatherByLoc[loc().id]?.days?.[date]);
+    const m=!isFreshwater() && Marine ? Marine.summary(state.marineByLoc[loc().id]?.days?.[date]):null;
+    const windMsg=state.weatherLoading.has(loc().id) ? 'Loading forecast…' : state.weatherErrors[loc().id] ? `Wind unavailable: ${escapeHtml(state.weatherErrors[loc().id])}` : 'No wind forecast yet. Model forecasts extend approximately 16 days.';
+    const swellMsg=state.marineLoading.has(loc().id) ? 'Loading forecast…' : state.marineErrors[loc().id] ? `Swell unavailable: ${escapeHtml(state.marineErrors[loc().id])}` : 'No marine forecast for this date. Marine model coverage is up to 8 days.';
+    return `<section class="card weather-card calendar-weather" aria-label="Wind and swell for ${escapeHtml(date)}">
+      <div class="row wrap"><h2>🌬️ Wind & swell forecast</h2><span class="score-badge">${escapeHtml(shortDate(date))} · AEST</span></div>
+      ${windUnitControl()}
+      <div class="weather-day-grid"><div class="weather-day-metric"><span>Wind · daily average</span><strong>${w ? windReading(w.avgWind) : '—'}</strong><small>${w ? `From ${escapeHtml(w.compass)} · peak gust ${windReading(w.maxGust)}` : windMsg}</small></div>
+      <div class="weather-day-metric"><span>Swell · daily maximum</span><strong>${isFreshwater() ? 'N/A' : m ? fmtHeight(m.maxSwell) : '—'}</strong><small>${isFreshwater() ? 'Freshwater lake: no ocean swell' : m ? `From ${escapeHtml(m.compass)} · ${fmtPeriod(m.period)} mean period${m.maxWave!=null ? ` · total waves up to ${fmtHeight(m.maxWave)}` : ''}` : swellMsg}</small></div></div>
+      <p class="hint">These are model forecasts, not live observations. Forecasts beyond provider availability are not estimated or invented. Weather does not change the five-star score. <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">Official BOM marine warnings ↗</a> · <a href="https://open-meteo.com/en/docs/marine-weather-api" target="_blank" rel="noopener noreferrer">Marine model source ↗</a></p>
+    </section>`;
   }
   // Open-Meteo's request always uses km/h; convert displayed wind values only.
   // 1 international knot is exactly 1.852 km/h.
@@ -249,11 +305,11 @@
     const entry = state.weatherByLoc[id];
     const isCurrent = entry?.data?.day === todayKey();
     const error = state.weatherErrors[id];
-    const source = `<p class="hint">Forecast model via <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a>, not a live BOM observation. For official marine forecasts and warnings, see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a>. Conditions on the water may be different.</p>`;
+    const source = `<p class="hint">Wind via <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a>, not a live BOM observation. For official marine forecasts and warnings, see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a>. Conditions on the water may be different.</p>`;
     if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2>${windUnitControl()}<p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${source}</section>`;
     if (!isCurrent) return `<section class="card weather-card"><div class="row"><h2>🌬️ Today's wind & weather</h2><span class="score-badge">Forecast</span></div>
       ${windUnitControl()}<p class="small">${state.weatherLoading.has(id) ? 'Loading hourly wind forecast…' : error ? `Weather temporarily unavailable: ${escapeHtml(error)}` : 'Waiting for the latest weather forecast…'}</p>
-      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${source}</section>`;
+      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${swellToday()}${source}</section>`;
     const data = entry.data;
     const hour = AEST_HOUR();
     const now = Weather.nearestHour(data, hour);
@@ -274,6 +330,7 @@
         <div><span class="weather-now-label">Forecast for ${localHourText(now.hour)}</span><div class="weather-now-speed">${windNumber(now.speed)}<span> ${windUnitLabel()}</span></div><div class="weather-now-label">From ${escapeHtml(now.compass)} · Gusts ${windReading(now.gust)}</div></div>
         <div class="weather-now-side"><div>${now.temp == null ? '—' : Math.round(now.temp) + '°C'}</div><div>${escapeHtml(Weather.condition(now.code))}</div><div>Rain ${now.rain == null ? '—' : Math.round(now.rain) + '%'}</div></div>
       </div>
+      ${swellToday()}
       <div class="weather-hours-header"><strong>Hour-by-hour wind</strong><span>Speed · direction · gusts</span></div>
       <div class="weather-hour-list" data-hourly-scroll data-location="${escapeHtml(id)}" tabindex="0" role="region" aria-label="Scrollable hourly wind speed, direction and gust forecast">${rows.map(renderRow).join('')}</div>
       <div class="weather-scroll-note">↕ Scroll for the full 24-hour forecast · current hour highlighted</div>
@@ -282,7 +339,7 @@
       <p class="hint">Wind direction is where the wind <b>comes from</b>. Arrow shows where it blows. Checked ${escapeHtml(lastUpdated)} AEST. Weather is not included in the five-star score yet.</p>${source}
     </section>`;
   }
-  function refresh() { render(); syncVisibleTides(); syncVisibleWeather(); }
+  function refresh() { render(); syncVisibleTides(); syncVisibleWeather(); syncVisibleMarine(); }
   function locationPicker() {
     return `<label for="location-select">Fishing location</label><select id="location-select">${LOCATIONS.map(l => `<option value="${l.id}"${l.id === state.locId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select>`;
   }
@@ -292,7 +349,7 @@
     return msg ? `<div class="notice" role="status">${escapeHtml(msg)}</div>` : '';
   }
   function tideScoringControl(p) {
-    if (isFreshwater()) return '';
+    if (!hasTideStation()) return '';
     const intervalChosen = state.tideScoringMode === 'interval';
     let note;
     if (intervalChosen && p.intervalUsed) note = 'Using verified 10-minute water-height changes in the fishing score.';
@@ -315,7 +372,7 @@
       <div class="hero-score"><div><div class="score-number">${p.score}<span>/100</span></div><div class="stars" aria-label="${p.stars} out of 5 stars">${starText(p.stars)}</div></div><span class="score-badge">${isFreshwater() ? 'Freshwater' : p.intervalUsed ? '10-min QLD movement' : isOfficial(date) ? 'Official QLD tides' : p.hasTides ? 'Tide informed' : 'Solunar only'}</span></div>
       <p class="small">${escapeHtml(sourceStatus(p))}. A <b>relative planning score</b>, not a catch probability or guaranteed result.</p>
       ${tideScoringControl(p)}
-      ${withSave ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button>` : ''}</div>` : ''}
+      ${withSave && !isOffshore() ? `<div class="actions"><button class="btn" data-action="save-trip" data-date="${date}">Save fishing session</button>${hasTideStation() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${date}">View tides</button>` : ''}</div>` : ''}
     </article>`;
   }
   function windowCards(p) {
@@ -337,6 +394,7 @@
     return [...p.tides].sort((a,b)=>a.time-b.time).map(e => `<div class="tide-row"><span class="tide-type">${eventName(e.type)}</span><span>${timeText(e.time)}</span><span class="tide-h">${e.height === null || !Number.isFinite(Number(e.height)) ? '—' : `${Number(e.height).toFixed(2)} m`}</span></div>`).join('');
   }
   function tideCard(p) {
+    if (isOffshore()) return `<section class="card"><h2>Hardy Reef · offshore reference</h2><p>No verified local Queensland tide station is configured for Hardy Reef. The score uses sun and moon only. Shute Harbour water-height data must not be treated as an offshore reef tide prediction.</p>${hardyZoneNotice()}</section>`;
     if (isFreshwater()) return `<section class="card"><div class="row"><h2 style="margin:0">Proserpine Dam · freshwater</h2><span class="score-badge">No coastal tides</span></div>
       <p class="small">Peter Faust Dam is a freshwater reservoir. Ocean high and low tide times are <b>not used</b> for lake fishing predictions.</p>
       <p class="hint">Barramundi and sooty grunter are stocked. A Stocked Impoundment Permit is required for anglers aged 18 or older.</p>
@@ -350,7 +408,7 @@
     </section>`;
   }
   function movementCard(p) {
-    if (isFreshwater()) return '';
+    if (!hasTideStation()) return '';
     if (!hasInterval(p.key)) return `<section class="card movement-card"><div class="row"><h2>≈ 10-minute tide movement</h2><span class="score-badge">High/low fallback</span></div>
       <p class="small">${escapeHtml(intervalStatus(p.key.slice(0, 4)))}. ${p.hasHighLow ? 'Your current score still uses the working high/low tide model.' : 'The current score uses sun/moon only.'}</p>
       <p class="hint">When a complete official 10-minute year is published, this section will show predicted water-level changes and use them to refine the rating.</p></section>`;
@@ -377,7 +435,7 @@
   function renderToday() {
     const date = todayKey(), p = predict(date);
     return `<p class="eyebrow">Your local fishing outlook</p><h1>Find your next great fishing window.</h1><p class="lead">Calculated for the Whitsundays, in Queensland time (AEST). Coastal tide forecasts sync automatically from Queensland Government data.</p>
-      <div class="card soft">${locationPicker()}</div>${flash()}
+      <div class="card soft">${locationPicker()}</div>${flash()}${hardyZoneNotice()}
       ${scoreCard(p,date)}
       ${weatherCard()}
       <section class="card"><div class="row"><h2>Best windows today</h2><span class="score-badge">Top 3</span></div>${windowCards(p)}<p class="hint">Fishing scores use the selected tide method, moon events and dawn/dusk. For detailed tidal movement data, open the Tides tab. Freshwater locations never use ocean tides.</p></section>
@@ -401,7 +459,9 @@
     const top = [...forecasts].sort((a,b)=>b.score-a.score || a.date.localeCompare(b.date)).slice(0,5);
     return `<p class="eyebrow">Plan ahead</p><h1>Fishing calendar</h1><p class="lead">Compare estimated fishing windows by day and save your trips.</p><div class="card soft">${locationPicker()}</div>${flash()}
       <section class="card"><div class="calendar-header"><button class="chevron" data-action="prev-month" aria-label="Previous month">‹</button><strong>${label}</strong><button class="chevron" data-action="next-month" aria-label="Next month">›</button></div>${calendar}<p class="hint">★ Relative score · ≈ Verified 10-minute movement · ≋ High/low tide estimate. Missing tide data uses sun/moon only. Freshwater ignores tides.</p></section>
-      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${selected.intervalUsed ? '<p class="hint">≈ Tide movement is based on official 10-minute predicted water heights.</p>' : ''}${windowCards(selected)}<div class="actions"><button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button>${!isFreshwater() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button>` : ''}</div></section>
+      ${hardyZoneNotice()}
+      ${calendarWeatherCard(state.selected)}
+      <section class="card"><div class="eyebrow">Selected date</div><h2>${escapeHtml(fullDate(state.selected))}</h2><div class="row"><span class="stars" aria-label="${selected.stars} out of 5 stars">${starText(selected.stars)}</span><span class="score-badge">${selected.score}/100</span></div><p class="small">${sourceStatus(selected)}</p>${selected.intervalUsed ? '<p class="hint">≈ Tide movement is based on official 10-minute predicted water heights.</p>' : ''}${windowCards(selected)}<div class="actions">${!isOffshore() ? `<button class="btn" data-action="save-trip" data-date="${state.selected}">Save this session</button>` : '<span class="small">Protected reef conditions reference only</span>'}${hasTideStation() ? `<button class="btn secondary" data-action="show-date-tides" data-date="${state.selected}">View tides</button>` : ''}</div></section>
       <section class="card"><h2>Top 5 dates this month</h2><div class="best-days">${top.map(d=>`<button class="best-day" data-action="select-date" data-date="${d.date}"><span>${shortDate(d.date)}${d.hasTides ? ' · tides available':''}</span><span class="star-small">${starText(d.stars)} · ${d.score}</span></button>`).join('')}</div></section>`;
   }
   function renderTrips() {
@@ -415,6 +475,7 @@
       <p class="hint">Saved trips are stored only in this browser. They do not automatically sync across devices.</p>`;
   }
   function renderTides() {
+    if (isOffshore()) return `<p class="eyebrow">Offshore reference</p><h1>Hardy Reef</h1><div class="card soft">${locationPicker()}</div>${hardyZoneNotice()}<section class="card"><h2>No local verified tide feed</h2><p>Hardy Reef is not covered by the two Queensland Government tide stations configured here. This app deliberately does not substitute Shute Harbour heights or 10-minute tidal movement for offshore reef conditions.</p><p>Use official tide information, marine forecasts and marine park zoning maps when planning any permitted activity in surrounding waters.</p></section>`;
     if (isFreshwater()) return `<p class="eyebrow">Freshwater mode</p><h1>Proserpine Dam</h1><p class="lead">Peter Faust Dam does not experience coastal tidal cycles.</p>
       <div class="card soft">${locationPicker()}</div>${flash()}
       <section class="card"><h2>Why there is no tide chart</h2><p>Proserpine Dam (Lake Proserpine / Peter Faust Dam) is a freshwater impoundment. This app calculates the sun and moon windows for the lake without adding coastal tides to its five-star rating.</p><p>For barramundi, consider water temperature, wind direction, seasonal changes and local structure alongside these astronomical windows.</p><p>A Queensland Stocked Impoundment Permit is required for line fishing by anglers aged 18 and over.</p><a href="https://www.qld.gov.au/recreation/activities/boating-fishing/rec-fishing/dams/stocked-impoundment-permits/locations/peter-faust" target="_blank" rel="noopener noreferrer">Official Peter Faust Dam fishing information ↗</a></section>`;
@@ -439,15 +500,15 @@
   }
   function renderAbout() {
     return `<p class="eyebrow">How it works</p><h1>About Solunar / Tide</h1>
-      <section class="card"><h2>What's new · v3.11</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
-      <p>Choose whether coastal fishing scores use verified 10-minute water-height changes or predicted high/low tide times. The selection is saved on your device. The 10-minute method falls back to high/low when its data is missing. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The compact Today weather panel contains a scrollable 24-hour wind forecast with wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
+      <section class="card"><h2>What's new · v3.12</h2><p>Coastal high/low predictions sync through Queensland Government’s CKAN Web API, with a verified official CSV fallback, using a GitHub Actions workflow. Once published to this site, tide data loads by station and year as needed. No manual entry is required.</p>
+      <p>Choose whether coastal fishing scores use verified 10-minute water-height changes or predicted high/low tide times. The selection is saved on your device. The 10-minute method falls back to high/low when its data is missing. Changes in predicted water height are not direct measurements of tidal current or proof of fish activity.</p><p>The compact Today weather panel contains a scrollable 24-hour wind forecast with wind speed, direction, gusts, temperature and rain chance for the selected fishing location, from Open-Meteo's active best-match forecast service. These are model forecasts, not live BOM measurements, and they do not change the five-star ratings.</p><p>Hardy Reef is an offshore conditions reference within a Green/no-take protected area; fishing is prohibited there. Swell model predictions and calendar wind forecasts are provided for planning, with limited forecast horizons. Proserpine Dam (Peter Faust Dam / Lake Proserpine) is a freshwater location. Its ratings never use coastal tides.</p><p>Your previously saved fishing trips remain on this device.</p></section>
       <section class="card"><h2>The 1–5 star rating</h2><p>Our illustrative <b>relative fishing opportunity score</b> uses moon overhead/underfoot, moonrise/moonset, dawn/dusk and lunar illumination. Coastal forecasts use verified 10-minute water-height changes when available; otherwise they retain high/low timing and midpoint estimates.</p>
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
       <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour uses Shute Harbour station predictions. Bowen uses Bowen station predictions. Proserpine Dam uses no coastal tide data.</p>
-        <p>Weather: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
+        <p>Weather and offshore marine swell: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.11 · Selectable tide scoring · Scrollable hourly wind · Three locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.12 · Offshore swell · Calendar wind and swell · Four locations</p></section>`;
   }
   function render() {
     try {
@@ -482,6 +543,7 @@
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
   function saveTrip(key) {
+    if (isOffshore()) { state.flash='Fishing is prohibited in Hardy Reef Green Zones. Choose a permitted fishing area before saving a fishing trip.';render();return; }
     const p = predict(key);
     const preferred = [...p.windows].sort((a,b)=>b.score-a.score)[0];
     if (!preferred) return;
@@ -532,7 +594,7 @@
         }
         break;
       }
-      case 'retry-weather': { state.weatherErrors[loc().id] = ''; syncVisibleWeather(true); break; }
+      case 'retry-weather': { state.weatherErrors[loc().id] = ''; state.marineErrors[loc().id]=''; syncVisibleWeather(true); syncVisibleMarine(true); break; }
       case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); state.intervalManifestPromise = null; state.intervalManifest = null; state.intervalErrors = {}; state.intervals = {}; state.intervalLoaded.clear(); refresh(); break; }
     }
   });
