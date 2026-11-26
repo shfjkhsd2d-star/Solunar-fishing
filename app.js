@@ -5,6 +5,7 @@
   const Tides = window.SolunarTides;
   const Weather = window.SolunarWeather;
   const Marine = window.SolunarMarine;
+  const Waves = window.SolunarWaves;
   const app = document.getElementById('app');
   if (!app || !Astro || !Tides) {
     if (app) app.textContent = 'App files were not loaded. Please refresh the page.';
@@ -51,6 +52,7 @@
     flash: '',
     weatherByLoc: {}, weatherLoading: new Set(), weatherErrors: {},
     marineByLoc: {}, marineLoading: new Set(), marineErrors: {},
+    observedWaves: null, wavesLoading: false, wavesError: '', wavesLoadedAt: 0,
     windUnit: persistent.windUnit === 'kn' ? 'kn' : 'kmh',
     tideScoringMode: persistent.tideScoringMode === 'highlow' ? 'highlow' : 'interval'
   };
@@ -240,7 +242,7 @@
   }
   // Separate marine forecast is deliberately optional: missing swell must never hide wind or tides.
   function syncVisibleMarine(force = false) {
-    if (!['today','calendar'].includes(state.tab) || !Marine || isFreshwater()) return;
+    if (state.tab !== 'calendar' || !Marine || isFreshwater()) return;
     const current=loc(), id=current.id;
     if (state.marineLoading.has(id)) return;
     const cache=state.marineByLoc[id];
@@ -254,6 +256,24 @@
       .catch(error=>{state.marineErrors[id]=error?.message||'Marine model not available';})
       .finally(()=>{state.marineLoading.delete(id);if (['today','calendar'].includes(state.tab) && loc().id===id) render();});
   }
+  // State of Queensland near-real-time observations, fetched from static JSON published by a
+  // separate optional GitHub Actions workflow. NEVER substitute these for model forecasts.
+  function syncVisibleWaves(force = false) {
+    if (state.tab !== 'today' || isFreshwater() || !Waves || state.wavesLoading) return;
+    if (!force && Date.now() - state.wavesLoadedAt < 30*60*1000) return;
+    state.wavesLoading = true;
+    state.wavesError = '';
+    fetch('./wave-data/abbot-point.json', {cache:'no-store'})
+      .then(response => {
+        if (!response.ok) throw new Error(response.status===404 ?
+          'Abbot Point observation file not published yet' : `Observations HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(json => {state.observedWaves = Waves.parse(json);state.wavesError='';})
+      .catch(error => { state.observedWaves=null; state.wavesError=error?.message||'Observations unavailable'; })
+      .finally(() => {state.wavesLoadedAt=Date.now();state.wavesLoading=false;
+        if (state.tab==='today' && !isFreshwater()) render();});
+  }
   // Model responses expose the center of the grid cell they actually used.
   // Use WGS84 haversine distance (great-circle kilometres), not browser position.
   function distanceKm(a, b) {
@@ -266,13 +286,13 @@
   function gridCoords(grid) {
     return `${Math.abs(grid.lat).toFixed(4)}° ${grid.lat < 0 ? 'S' : 'N'}, ${Math.abs(grid.lon).toFixed(4)}° ${grid.lon < 0 ? 'W' : 'E'}`;
   }
-  function forecastGridDetails() {
+  function forecastGridDetails(includeMarine = true) {
     const selected = loc();
     const origin = { lat:selected.lat, lon:selected.lon };
     const wind = state.weatherByLoc[selected.id]?.grid || null;
     const swell = isFreshwater() ? null : state.marineByLoc[selected.id]?.grid || null;
     const data = [{name:'Wind',grid:wind, expected:true,kind:selected.water === 'offshore' ? 'Sea-grid preferred' : 'Best-match model'}];
-    if (!isFreshwater()) data.push({name:'Swell / waves',grid:swell,expected:true,kind:'Marine sea grid'});
+    if (!isFreshwater() && includeMarine) data.push({name:'Swell / waves',grid:swell,expected:true,kind:'Marine sea grid'});
     const rows = data.map(d => {
       const km = distanceKm(origin,d.grid);
       return `<div class="grid-source-row"><span><b>${escapeHtml(d.name)}</b><small>${escapeHtml(d.kind)}</small></span>
@@ -304,18 +324,35 @@
     if (!isOffshore()) return '';
     return `<div class="notice warning" role="note"><b>Hardy Reef zoning alert:</b> Hardy Reef is within a Marine National Park (Green/no-take) area. Recreational fishing is prohibited in Green Zones. This offshore location is for weather and journey planning only. Verify where fishing is permitted using the <a href="https://www.gbrmpa.gov.au/access/zoning/eye-on-the-reef-app" target="_blank" rel="noopener noreferrer">Reef Authority's zoning resources ↗</a> before setting out.</div>`;
   }
-  function swellToday() {
-    if (isFreshwater()) return `<p class="hint">Swell forecasts do not apply to freshwater Proserpine Dam.</p>`;
-    const id=loc().id, day=state.marineByLoc[id]?.days?.[todayKey()];
-    if (!day) {
-      const msg=state.marineErrors[id] ? `Swell unavailable: ${escapeHtml(state.marineErrors[id])}` : state.marineLoading.has(id) ? 'Loading offshore swell forecast…' : 'Swell forecast not available at this location.';
-      return `<div class="swell-strip"><strong>🌊 Swell</strong><span class="small">${msg}</span></div>`;
-    }
-    const current=Marine.nearestHour(day,AEST_HOUR()), total=Marine.summary(day);
-    return `<div class="swell-strip" aria-label="Predicted offshore swell">
-      <div><span class="weather-now-label">🌊 Swell · ${localHourText(current.hour)}</span><strong>${fmtHeight(current.height)}</strong><small>From ${escapeHtml(Marine.compass(current.direction))} · ${fmtPeriod(current.period)} period</small></div>
-      <div><span class="weather-now-label">Today's peak swell</span><strong>${fmtHeight(total.maxSwell)}</strong><small>${total.maxWave==null ? 'Total waves unavailable' : `Peak combined waves ${fmtHeight(total.maxWave)}`}</small></div>
-    </div><p class="hint">Swell and total wave height are different. Model estimates may be inaccurate in sheltered bays and near reefs.</p>`;
+  // Significant wave height is the upper-third mean of measured waves. It is NOT isolated
+  // swell height and must not be mistaken for the nearby fishing location's conditions.
+  function observedWaveCard() {
+    if (isFreshwater()) return `<p class="hint">Ocean wave observations do not apply to Proserpine Dam.</p>`;
+    const source = 'https://www.qld.gov.au/environment/coasts-waterways/beach/monitoring/waves-sites/abbot-point';
+    const distance = distanceKm({lat:loc().lat,lon:loc().lon}, {lat:-19.860567,lon:148.094333});
+    const distanceNote = distance === null ? '' : `${distance.toFixed(0)} km from ${escapeHtml(loc().name)}`;
+    const link = `<a href="${source}" target="_blank" rel="noopener noreferrer">QLD Abbot Point buoy ↗</a>`;
+    const reading = state.observedWaves?.latest;
+    if (!reading) return `<div class="observed-wave-card"><div class="row wrap"><strong>🌊 Abbot Point · measured waves</strong><span class="score-badge">Observation</span></div>
+      <p class="small">${state.wavesLoading ? 'Loading Queensland buoy observations…' :
+        state.wavesError ? `Observation unavailable: ${escapeHtml(state.wavesError)}` : 'Waiting for official buoy observations.'}</p>
+      <p class="hint">${escapeHtml(distanceNote)} · ${link}. Today's forecast swell for future hours is available in Calendar.</p>
+      <button class="btn outline" data-action="retry-waves" type="button">Refresh observations</button></div>`;
+    const at = new Date(reading.time).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',
+      hour:'numeric',minute:'2-digit',hour12:true,day:'numeric',month:'short'});
+    const hmax = reading.hmax === null ? '—' : `${reading.hmax.toFixed(2)} m`;
+    const period = reading.tp === null ? '—' : `${reading.tp.toFixed(0)} s`;
+    const direction = reading.direction === null ? '—' : `${Waves.compass(reading.direction)} (${Math.round(reading.direction)}°)`;
+    return `<div class="observed-wave-card" aria-label="Observed waves at Abbot Point">
+      <div class="row wrap"><strong>🌊 Abbot Point · measured waves</strong><span class="score-badge">Observed · not forecast</span></div>
+      <div class="observed-wave-grid"><div><span>Significant wave height (Hs)</span><strong>${reading.hs.toFixed(2)} m</strong></div>
+      <div><span>Largest measured wave (Hmax)</span><strong>${hmax}</strong></div>
+      <div><span>Peak period</span><strong>${period}</strong></div>
+      <div><span>Wave direction · from</span><strong>${escapeHtml(direction)}</strong></div></div>
+      <p class="hint">Recorded ${escapeHtml(at)} AEST · ${Math.round(state.observedWaves.hoursOld*10)/10} h old · ${escapeHtml(distanceNote)}. ${link}</p>
+      <p class="hint">Buoy observations are unverified. These are total measured waves, not a separate swell component or predictions for later today. Conditions may differ substantially near Hardy Reef, islands or sheltered bays. Check BOM marine warnings before boating.</p>
+      <button class="btn outline" data-action="retry-waves" type="button">Refresh buoy readings</button>
+    </div>`;
   }
   function calendarWeatherCard(date) {
     if (date < todayKey()) return `<section class="card"><h2>Wind & swell · ${escapeHtml(shortDate(date))}</h2><p class="small">Past date: current weather forecasts aren't historical observations.</p></section>`;
@@ -353,10 +390,10 @@
     const isCurrent = entry?.data?.day === todayKey();
     const error = state.weatherErrors[id];
     const source = `<p class="hint">Wind via <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a>, not a live BOM observation. For official marine forecasts and warnings, see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a>. Conditions on the water may be different.</p>`;
-    if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2>${windUnitControl()}<p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${source}</section>`;
+    if (!Weather) return `<section class="card weather-card"><h2>Hourly weather & wind</h2>${windUnitControl()}<p class="small">Weather module is unavailable. Refresh the app to load the latest files.</p>${observedWaveCard()}${source}</section>`;
     if (!isCurrent) return `<section class="card weather-card"><div class="row"><h2>🌬️ Today's wind & weather</h2><span class="score-badge">Forecast</span></div>
       ${windUnitControl()}<p class="small">${state.weatherLoading.has(id) ? 'Loading hourly wind forecast…' : error ? `Weather temporarily unavailable: ${escapeHtml(error)}` : 'Waiting for the latest weather forecast…'}</p>
-      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${swellToday()}${forecastGridDetails()}${source}</section>`;
+      ${error ? `<button class="btn secondary" data-action="retry-weather">Try weather again</button>` : ''}${observedWaveCard()}${forecastGridDetails(false)}${source}</section>`;
     const data = entry.data;
     const hour = AEST_HOUR();
     const now = Weather.nearestHour(data, hour);
@@ -377,8 +414,8 @@
         <div><span class="weather-now-label">Forecast for ${localHourText(now.hour)}</span><div class="weather-now-speed">${windNumber(now.speed)}<span> ${windUnitLabel()}</span></div><div class="weather-now-label">From ${escapeHtml(now.compass)} · Gusts ${windReading(now.gust)}</div></div>
         <div class="weather-now-side"><div>${now.temp == null ? '—' : Math.round(now.temp) + '°C'}</div><div>${escapeHtml(Weather.condition(now.code))}</div><div>Rain ${now.rain == null ? '—' : Math.round(now.rain) + '%'}</div></div>
       </div>
-      ${swellToday()}
-      ${forecastGridDetails()}
+      ${observedWaveCard()}
+      ${forecastGridDetails(false)}
       <div class="weather-hours-header"><strong>Hour-by-hour wind</strong><span>Speed · direction · gusts</span></div>
       <div class="weather-hour-list" data-hourly-scroll data-location="${escapeHtml(id)}" tabindex="0" role="region" aria-label="Scrollable hourly wind speed, direction and gust forecast">${rows.map(renderRow).join('')}</div>
       <div class="weather-scroll-note">↕ Scroll for the full 24-hour forecast · current hour highlighted</div>
@@ -387,7 +424,7 @@
       <p class="hint">Wind direction is where the wind <b>comes from</b>. Arrow shows where it blows. Checked ${escapeHtml(lastUpdated)} AEST. Weather is not included in the five-star score yet.</p>${source}
     </section>`;
   }
-  function refresh() { render(); syncVisibleTides(); syncVisibleWeather(); syncVisibleMarine(); }
+  function refresh() { render(); syncVisibleTides(); syncVisibleWeather(); syncVisibleMarine(); syncVisibleWaves(); }
   function locationPicker() {
     return `<label for="location-select">Fishing location</label><select id="location-select">${LOCATIONS.map(l => `<option value="${l.id}"${l.id === state.locId ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select>`;
   }
@@ -554,9 +591,10 @@
         <div class="tide-row"><span>★★★★★</span><span>78–100</span><span>Excellent</span></div><div class="tide-row"><span>★★★★☆</span><span>62–77</span><span>Very good</span></div><div class="tide-row"><span>★★★☆☆</span><span>46–61</span><span>Good</span></div><div class="tide-row"><span>★★☆☆☆</span><span>30–45</span><span>Fair</span></div><div class="tide-row"><span>★☆☆☆☆</span><span>1–29</span><span>Low</span></div>
         <p class="hint">This heuristic is not a scientifically validated fish-catch probability. No ocean tide score is used in freshwater.</p></section>
       <section class="card"><h2>Data sources and limitations</h2><p>Astronomy uses approximate SunCalc-style calculations in AEST (UTC+10). Tide events use Bureau of Meteorology predictions released via Maritime Safety Queensland and Queensland Government Open Data under CC BY 4.0. Shute Harbour uses Shute Harbour station predictions. Bowen uses Bowen station predictions. Proserpine Dam uses no coastal tide data.</p>
-        <p>Weather and offshore marine swell: <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
+        <p>Wind and forecast swell (Calendar): <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo</a> forecast data under CC BY 4.0. BOM ACCESS-G model updates are currently unavailable via the public Open-Meteo feed. This app does not present official BOM wind observations; see <a href="https://www.bom.gov.au/marine/" target="_blank" rel="noopener noreferrer">BOM Marine</a> for official forecasts and warnings.</p><p>Sources: <a href="https://www.msq.qld.gov.au/tides/open-data" target="_blank" rel="noopener noreferrer">MSQ Open Data</a> · <a href="https://www.data.qld.gov.au/dataset/shute-harbour-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Shute Harbour</a> · <a href="https://www.data.qld.gov.au/dataset/bowen-tide-gauge-predicted-high-low-data" target="_blank" rel="noopener noreferrer">Bowen</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> · <a href="https://github.com/mourner/suncalc" target="_blank" rel="noopener noreferrer">SunCalc BSD-2-Clause</a>.</p>
+        <p>Today wave observations: <a href="https://www.qld.gov.au/environment/coasts-waterways/beach/monitoring/waves-sites/abbot-point" target="_blank" rel="noopener noreferrer">Queensland Government Abbot Point monitoring</a>, near-real-time measurements provided under CC BY 4.0. This is not a buoy at Hardy Reef or the selected fishing location.</p>
         <div class="notice warning">Do not use this app for navigation, marine safety or regulatory compliance. Check current official forecasts, fishing rules and conditions.</div></section>
-      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.12 · Offshore swell · Calendar wind and swell · Four locations</p></section>`;
+      <section class="card"><h2>Add to iPhone Home Screen</h2><p>Open the deployed website in <b>Safari</b>, tap Share, choose <b>Add to Home Screen</b>, then Add.</p><p class="small">Version 3.14 · Abbot Point buoy observations · Calendar wind and swell · Four locations</p></section>`;
   }
   function render() {
     try {
@@ -642,6 +680,7 @@
         }
         break;
       }
+      case 'retry-waves': { state.wavesLoadedAt=0; syncVisibleWaves(true); break; }
       case 'retry-weather': { state.weatherErrors[loc().id] = ''; state.marineErrors[loc().id]=''; syncVisibleWeather(true); syncVisibleMarine(true); break; }
       case 'retry-tides': { state.manifestPromise = null; state.manifest = null; state.manifestError = ''; state.yearErrors = {}; state.official = {}; state.loadedYears.clear(); state.intervalManifestPromise = null; state.intervalManifest = null; state.intervalErrors = {}; state.intervals = {}; state.intervalLoaded.clear(); refresh(); break; }
     }

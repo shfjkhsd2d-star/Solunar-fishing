@@ -132,3 +132,13 @@ label{display:block;color:var(--sub);font-size:12px;font-weight:700;margin:0 0 7
 .reef-reference-links{display:flex;flex-direction:column;gap:9px;margin:12px 0}
 .reef-reference-links a{overflow-wrap:anywhere;font-size:12px}
 @media(max-width:360px){.forecast-grid-details{padding:8px}.grid-source-row{font-size:10px}.grid-source-row b{font-size:10px}}
+
+/* v3.14 — observed Queensland Abbot Point waves, compact in Today weather. */
+.observed-wave-card {margin:12px 0 8px;padding:12px;border:1px solid #377385;border-radius:13px;background:#0c3447}
+.observed-wave-card>.row>strong {font-size:13px;color:#e0fbf8}
+.observed-wave-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+.observed-wave-grid>div {min-width:0;background:#082a3b;border:1px solid #2d5b6e;border-radius:9px;padding:10px}
+.observed-wave-grid span {display:block;color:#accfd9;font-size:10px;line-height:1.4;min-height:28px}
+.observed-wave-grid strong {display:block;color:#f4ffff;font-size:17px;line-height:1.4;margin-top:4px;overflow-wrap:anywhere}
+.observed-wave-card .btn {margin:8px 0 0}
+@media(max-width:365px){.observed-wave-card{padding:10px}.observed-wave-grid{gap:6px}.observed-wave-grid strong{font-size:15px}}
