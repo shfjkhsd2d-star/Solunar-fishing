@@ -1,0 +1,39 @@
+name: Sync Queensland Abbot Point observed waves
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/sync_abbot_point_waves.py'
+      - '.github/workflows/sync-abbot-waves.yml'
+  schedule:
+    - cron: '17 */3 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: sync-abbot-point-waves
+  cancel-in-progress: false
+jobs:
+  sync-wave-observations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and validate official Abbot Point buoy observations
+        run: python scripts/sync_abbot_point_waves.py
+      - name: Publish latest Abbot Point data
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add wave-data/abbot-point.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update Abbot Point observed waves [skip ci]'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo 'Abbot Point buoy data unchanged'
+          fi
