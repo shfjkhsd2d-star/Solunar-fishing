@@ -6,94 +6,14 @@
     "lat": -19.860567,
     "lon": 148.094333
   },
-  "recordedAt": "2026-11-28T03:00:00Z",
-  "generatedAt": "2026-11-28T04:05:00Z",
+  "recordedAt": "2026-11-28T06:20:00Z",
+  "generatedAt": "2026-11-28T07:25:30Z",
   "sourcePage": "https://www.qld.gov.au/environment/coasts-waterways/beach/monitoring/waves-sites/abbot-point",
   "dataSource": "https://www.data.qld.gov.au/dataset/coastal-data-system-near-real-time-wave-data",
   "retrievedFrom": "https://apps.des.qld.gov.au/data-sets/waves/wave-7dayopdata.csv",
   "measurement": "Observed significant wave height (Hs), not isolated swell or a forecast",
   "license": "CC BY 4.0 (State of Queensland)",
   "observations": [
-    {
-      "time": "2026-11-26T19:20:00Z",
-      "hs": 0.6,
-      "hmax": 1.02,
-      "tp": 4.5,
-      "direction": 93,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T19:40:00Z",
-      "hs": 0.56,
-      "hmax": 0.99,
-      "tp": 4.4,
-      "direction": 93,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T20:00:00Z",
-      "hs": 0.56,
-      "hmax": 0.82,
-      "tp": 3.8,
-      "direction": 87,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T20:20:00Z",
-      "hs": 0.58,
-      "hmax": 1.1,
-      "tp": 3.6,
-      "direction": 89,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T20:40:00Z",
-      "hs": 0.56,
-      "hmax": 0.81,
-      "tp": 4.2,
-      "direction": 85,
-      "sst": 28.0
-    },
-    {
-      "time": "2026-11-26T21:00:00Z",
-      "hs": 0.59,
-      "hmax": 1.01,
-      "tp": 4.3,
-      "direction": 91,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T21:20:00Z",
-      "hs": 0.59,
-      "hmax": 1.02,
-      "tp": 4.1,
-      "direction": 86,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T21:40:00Z",
-      "hs": 0.58,
-      "hmax": 1.05,
-      "tp": 3.9,
-      "direction": 87,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T22:00:00Z",
-      "hs": 0.61,
-      "hmax": 1.02,
-      "tp": 4.0,
-      "direction": 87,
-      "sst": 28.1
-    },
-    {
-      "time": "2026-11-26T22:20:00Z",
-      "hs": 0.57,
-      "hmax": 0.86,
-      "tp": 4.1,
-      "direction": 86,
-      "sst": 28.1
-    },
     {
       "time": "2026-11-26T22:40:00Z",
       "hs": 0.59,
@@ -780,6 +700,86 @@
       "hmax": 0.81,
       "tp": 3.4,
       "direction": 88,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T03:20:00Z",
+      "hs": 0.45,
+      "hmax": 0.79,
+      "tp": 3.7,
+      "direction": 84,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T03:40:00Z",
+      "hs": 0.45,
+      "hmax": 0.72,
+      "tp": 3.1,
+      "direction": 87,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T04:00:00Z",
+      "hs": 0.46,
+      "hmax": 0.79,
+      "tp": 3.7,
+      "direction": 83,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T04:20:00Z",
+      "hs": 0.47,
+      "hmax": 0.85,
+      "tp": 3.7,
+      "direction": 89,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T04:40:00Z",
+      "hs": 0.48,
+      "hmax": 0.82,
+      "tp": 3.8,
+      "direction": 95,
+      "sst": 28.5
+    },
+    {
+      "time": "2026-11-28T05:00:00Z",
+      "hs": 0.49,
+      "hmax": 0.81,
+      "tp": 3.1,
+      "direction": 89,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T05:20:00Z",
+      "hs": 0.49,
+      "hmax": 0.81,
+      "tp": 3.5,
+      "direction": 97,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T05:40:00Z",
+      "hs": 0.46,
+      "hmax": 0.78,
+      "tp": 3.2,
+      "direction": 86,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T06:00:00Z",
+      "hs": 0.49,
+      "hmax": 0.87,
+      "tp": 3.4,
+      "direction": 87,
+      "sst": 28.4
+    },
+    {
+      "time": "2026-11-28T06:20:00Z",
+      "hs": 0.49,
+      "hmax": 0.82,
+      "tp": 3.6,
+      "direction": 84,
       "sst": 28.4
     }
   ]
